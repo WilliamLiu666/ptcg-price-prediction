@@ -2,25 +2,50 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from urllib.parse import urljoin
+from pathlib import Path
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 
 class SimpleFetcher:
-    def __init__(self, db_path: str = "ptcg.sqlite"):
+    def __init__(self, db_path: str = "ptcg.sqlite", html_dir: str | None = None):
         self.db_path = db_path
+        # html_dir: 传 None 表示不默认存文件；传目录则默认把抓到的 html 存进去
+        self.html_dir = Path(html_dir) if html_dir else None
+
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         }
 
     # ---------- 网络与文件 ----------
-    def fetch_html(self, url: str) -> str:
+    def fetch_html(self, url: str, filename: str, save_to: str | None = None) -> str:
+        """
+        拉取 HTML。
+        - save_to: 指定保存到某个文件路径（优先级最高）
+        - 如果 save_to=None 且 self.html_dir 不为空：会自动存到 html_dir 下（文件名用时间戳）
+        """
         response = requests.get(url, headers=self.headers, timeout=30)
         response.raise_for_status()
-        return response.text
+        html = response.text
+
+        # 保存逻辑：save_to > self.html_dir > 不保存
+        if save_to:
+            self.save_html(html, save_to)
+        elif self.html_dir and filename:
+            self.html_dir.mkdir(parents=True, exist_ok=True)
+            path = self.html_dir / f"{filename}.html"
+            self.save_html(html, str(path))
+        elif self.html_dir:
+            self.html_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            path = self.html_dir / f"page_{ts}.html"
+            self.save_html(html, str(path))
+
+        return html
 
     def save_html(self, html: str, path: str) -> None:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(html)
 
@@ -30,12 +55,16 @@ class SimpleFetcher:
         items = []
 
         product_divs = soup.find_all("div", class_="item_data")
-
         for div in product_divs:
+            if not isinstance(div, Tag):
+                continue
             product_id = div.get("data-product-id")
 
             a = div.find("a", class_="item_data_link")
-            href = a.get("href") if a else None
+            href = a.get("href") if isinstance(a, Tag) else None
+            # Convert href to string if it's a list (BeautifulSoup returns lists for multi-valued attributes)
+            if isinstance(href, list):
+                href = href[0] if href else None
             product_url = urljoin(base_url, href) if href else None
 
             name_span = div.select_one("p.item_name span.goods_name")
@@ -51,8 +80,8 @@ class SimpleFetcher:
             stock_text = stock_p.get_text(strip=True) if stock_p else None  # 例如 "在庫数 2枚"
 
             img = div.select_one("div.global_photo img")
-            img_url = img.get("src") if img else None
-            img_alt = img.get("alt") if img else None
+            img_url = img.get("src") if isinstance(img, Tag) else None
+            img_alt = img.get("alt") if isinstance(img, Tag) else None
 
             items.append({
                 "product_id": product_id,
@@ -72,6 +101,7 @@ class SimpleFetcher:
             html = f.read()
         return self.parse_products(html)
 
+    # ---------- SQLite ----------
     @staticmethod
     def _parse_price(price_str: str | None) -> float | None:
         """'79,800円' -> 79800"""
@@ -105,7 +135,6 @@ class SimpleFetcher:
                 if not product_id or not name or not url:
                     continue
 
-                # 1) products
                 cur.execute("""
                 INSERT INTO products (product_id, url, name, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?)
@@ -115,7 +144,6 @@ class SimpleFetcher:
                   updated_at = excluded.updated_at
                 """, (product_id, url, name, captured_at, captured_at))
 
-                # 2) price_history（每天一条）
                 cur.execute("""
                 INSERT INTO price_history (
                   product_id, captured_date, captured_at, price, currency, stock_status
@@ -141,22 +169,18 @@ class SimpleFetcher:
 
         return written
 
-    # ---------- 一条龙 ----------
-    def fetch_parse_and_save(self, url: str) -> int:
-        """
-        1) 拉取页面
-        2) 解析商品
-        3) 写入 sqlite
-        返回：写入条数（处理的商品数）
-        """
-        html = self.fetch_html(url)
-        items = self.parse_products(html)
-        return self.save_products_to_sqlite(items)
-
 
 if __name__ == "__main__":
-    fetcher = SimpleFetcher(db_path="ptcg.sqlite")
-    # 示例：把 url 替换成你的列表页链接
-    url = "https://www.cardrush-pokemon.jp/product-group/267"
-    n = fetcher.fetch_parse_and_save(url)
+    fetcher = SimpleFetcher(
+        db_path="ptcg.sqlite",
+        html_dir="cardrush"  # ✅ 改动1：默认存到这个目录（可改）
+    )
+
+    url = "https://www.cardrush-pokemon.jp/product-group/268"
+
+    # ✅ 改动2：分三步走
+    html = fetcher.fetch_html(url, filename = 'group268')                 # 拉取（会自动存 raw_html/page_*.html）
+    items = fetcher.parse_products(html)           # 解析
+    n = fetcher.save_products_to_sqlite(items)     # 入库
+
     print(f"✅ 写入完成：{n} 条")

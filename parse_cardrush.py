@@ -1,6 +1,6 @@
-from fetcher import SimpleFetcher
+from cardrushFetcher import CardrushFetcher
 
-fetcher = SimpleFetcher()
+fetcher = CardrushFetcher()
 items = fetcher.parse_products_from_html_file("cardrush/cardrush_267.html")
 
 print("解析到商品数量：", len(items))

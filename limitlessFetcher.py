@@ -260,7 +260,7 @@ if __name__ == "__main__":
     fetcher = LimitlessFetcher(html_dir="Limitless", db_path="ptcg.sqlite")
     #html = fetcher.fetch_html(lang="jp", set_code="SV11B", card_code="2")
     html = fetcher.fetch_html(lang="en", set_code="BLK", card_code="2")
-    hrefs = fetcher.extract_hrefs(html)
+    hrefs = fetcher.extract_hrefs(html, prefix="/cards/jp")
     print(hrefs)
     rarity = fetcher.extract_rarity(html)
     fetcher.save_card_index()

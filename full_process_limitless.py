@@ -1,30 +1,51 @@
+import sqlite3
 from limitlessFetcher import LimitlessFetcher
+
+DB_PATH = "ptcg.sqlite"
 
 fetcher = LimitlessFetcher(
     html_dir="Limitless",
-    db_path="ptcg.sqlite"
+    db_path=DB_PATH
 )
 
-for card_code in range(1, 173):  # BLK has 172 cards
-    try:
-        html = fetcher.fetch_html(
-            lang="en",
-            set_code="BLK",
-            card_code=str(card_code)
-        )
-    except Exception as e:
-        print(f"[SKIP] BLK/{card_code} fetch failed: {e}")
-        continue
+def load_series_records(db_path: str):
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+            SELECT series_code, lang, size
+            FROM series_limitless
+            WHERE size IS NOT NULL AND size > 0
+            ORDER BY series_code, lang
+        """).fetchall()
+    return rows
 
-    # 1️⃣ 提取 rarity
-    rarity = fetcher.extract_rarity(html)
+def main():
+    rows = load_series_records(DB_PATH)
 
+    for r in rows:
+        series_code = r["series_code"]
+        lang = r["lang"]
+        size = int(r["size"])
 
-    # 3️⃣ 写库（你已有的函数）
-    fetcher.save_card_index()
+        print(f"\n[Series] {series_code} lang={lang} size={size}")
 
-    print(
-        f"[OK] BLK/{card_code} "
-        f"rarity={rarity!r} "
-    )
+        for card_code in range(1, size + 1):
+            try:
+                html = fetcher.fetch_html(
+                    lang=lang,
+                    set_code=series_code,
+                    card_code=str(card_code),
+                    filename=f"{series_code}_{card_code}_{lang}"
+                )
+            except Exception as e:
+                print(f"[SKIP] {series_code}/{card_code} fetch failed: {e}")
+                continue
 
+            rarity = fetcher.extract_rarity(html)
+
+            fetcher.save_card_index()
+
+            print(f"[OK] {series_code}/{card_code} rarity={rarity!r}")
+
+if __name__ == "__main__":
+    main()

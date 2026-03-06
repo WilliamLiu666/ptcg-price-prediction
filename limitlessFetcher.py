@@ -84,7 +84,7 @@ class LimitlessFetcher:
 
             # Generate a UTC timestamp-based filename for uniqueness
             ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-            path = self.html_dir / f"page_{ts}.html"
+            path = self.html_dir / f"page_{ts}"
             self.save_html(html, str(path))
 
         # Return the raw HTML content for immediate parsing or processing
@@ -123,6 +123,19 @@ class LimitlessFetcher:
                         })
         return out
 
+    def extract_id(self, html: str):
+        soup = self._soup(html)
+        self.card_id = None
+        self.data_id = None
+
+        for c in soup.find_all(string=lambda t: isinstance(t, Comment)):
+            text = str(c).strip()
+
+            if text.startswith("CARD ID"):
+                self.card_id = text.replace("CARD ID", "").strip()
+            elif text.startswith("DATA ID"):
+                self.data_id = text.replace("DATA ID", "").strip()
+
     # 4) 获取rarity
     def extract_rarity(self, html: str) -> dict[str, str | None]:
         soup = self._soup(html)
@@ -136,7 +149,7 @@ class LimitlessFetcher:
                 rarity = text.split("·", 1)[-1].strip()
             else:
                 rarity = None
-        
+        '''
         card_id = None
         data_id = None
 
@@ -147,14 +160,12 @@ class LimitlessFetcher:
                 card_id = text.replace("CARD ID", "").strip()
             elif text.startswith("DATA ID"):
                 data_id = text.replace("DATA ID", "").strip()
-
+        '''
         self.rarity = rarity
-        self.card_id = card_id
-        self.data_id = data_id
 
         return {
-            "card_id": card_id,
-            "data_id": data_id,
+            "card_id": self.card_id,
+            "data_id": self.data_id,
             "rarity": rarity
         }
 
@@ -256,11 +267,109 @@ class LimitlessFetcher:
             )
             conn.commit()
 
+    def extract_price(self, html: str) -> dict[str, float | None]:
+        soup = self._soup(html)
+
+        usd_tag = soup.select_one("span.card-price.usd")
+        eur_tag = soup.select_one("span.card-price.eur")
+
+        usd_price = None
+        eur_price = None
+
+        if usd_tag:
+            text = usd_tag.get_text(strip=True)
+            m = re.search(r"\d+\.?\d*", text)
+            if m:
+                usd_price = float(m.group())
+
+        if eur_tag:
+            text = eur_tag.get_text(strip=True)
+            m = re.search(r"\d+\.?\d*", text)
+            if m:
+                eur_price = float(m.group())
+
+        self.usd_price = usd_price
+        self.eur_price = eur_price
+
+        return {
+            "usd_price": usd_price,
+            "eur_price": eur_price,
+        }
+
+    def save_card_price(self) -> None:
+        """
+        Upsert one card record into prices_limitless using card_id as PK.
+        """
+
+        if self.db_path is None:
+            raise RuntimeError("db_path is not set. Please pass db_path when creating LimitlessFetcher.")
+
+        lang = self.lang
+        set_code = self.set_code
+        card_code = self.card_code
+        card_id = self.card_id
+        data_id = self.data_id
+        rarity = self.rarity
+        usd_price = self.usd_price
+        eur_price = self.eur_price
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute("PRAGMA foreign_keys=ON;")
+
+            conn.execute(
+                """
+                INSERT INTO prices_limitless
+                (card_id, data_id, lang, set_code, card_code, rarity, usd_price, eur_price)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+
+                ON CONFLICT(card_id)
+                DO UPDATE SET
+
+                -- keep mapping keys in sync
+                lang = excluded.lang,
+                set_code = excluded.set_code,
+                card_code = excluded.card_code,
+
+                -- update optional metadata
+                data_id = CASE
+                    WHEN excluded.data_id IS NOT NULL THEN excluded.data_id
+                    ELSE prices_limitless.data_id
+                END,
+
+                rarity = CASE
+                    WHEN excluded.rarity IS NOT NULL THEN excluded.rarity
+                    ELSE prices_limitless.rarity
+                END,
+
+                -- update prices if new values exist
+                usd_price = CASE
+                    WHEN excluded.usd_price IS NOT NULL THEN excluded.usd_price
+                    ELSE prices_limitless.usd_price
+                END,
+
+                eur_price = CASE
+                    WHEN excluded.eur_price IS NOT NULL THEN excluded.eur_price
+                    ELSE prices_limitless.eur_price
+                END
+                """,
+                (card_id, data_id, lang, set_code, card_code, rarity, usd_price, eur_price),
+            )
+
+            conn.commit()
+
+
+
 if __name__ == "__main__":
     fetcher = LimitlessFetcher(html_dir="Limitless", db_path="ptcg.sqlite")
     #html = fetcher.fetch_html(lang="jp", set_code="SV11B", card_code="2")
     html = fetcher.fetch_html(lang="en", set_code="BLK", card_code="2")
+    fetcher.extract_id(html)
     hrefs = fetcher.extract_hrefs(html, prefix="/cards/jp")
     print(hrefs)
+    prices = fetcher.extract_price(html)
+    print(prices)
     rarity = fetcher.extract_rarity(html)
-    fetcher.save_card_index()
+    print(rarity)
+    fetcher.save_card_price()

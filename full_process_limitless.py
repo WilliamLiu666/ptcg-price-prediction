@@ -40,12 +40,17 @@ def main():
             except Exception as e:
                 print(f"[SKIP] {series_code}/{card_code} fetch failed: {e}")
                 continue
+            
+            fetcher.extract_id(html)
 
             rarity = fetcher.extract_rarity(html)
-
             fetcher.save_card_index()
 
-            print(f"[OK] {series_code}/{card_code} rarity={rarity!r}")
+            if lang == "en":
+                price = fetcher.extract_price(html)
+                fetcher.save_card_price()
+
+            print(f"[OK] {series_code}/{card_code} rarity={rarity!r} price = {price!r}")
 
 if __name__ == "__main__":
     main()

@@ -44,13 +44,15 @@ def main():
             fetcher.extract_id(html)
 
             rarity = fetcher.extract_rarity(html)
+            name = fetcher.extract_name(html)
             fetcher.save_card_index()
 
             if lang == "en":
                 price = fetcher.extract_price(html)
                 fetcher.save_card_price()
-
-            print(f"[OK] {series_code}/{card_code} rarity={rarity!r} price = {price!r}")
+                print(f"[OK] {series_code}/{card_code} rarity={rarity!r} price = {price!r}")
+            else:
+                print(f"[OK] {series_code}/{card_code} rarity={rarity!r}")
 
 if __name__ == "__main__":
     main()

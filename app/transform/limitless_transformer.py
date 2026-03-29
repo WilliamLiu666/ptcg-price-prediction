@@ -49,7 +49,7 @@ class LimitlessTransformer:
         out: list[dict[str, str]] = []
 
         for a in soup.find_all("a", href=True):
-            href = str(a.get("href", "")).strip() # type: ignore
+            href = str(a.get("href", "")).strip()  # type: ignore
             if not href.startswith(prefix):
                 continue
 
@@ -207,9 +207,14 @@ class LimitlessTransformer:
 
 
 if __name__ == "__main__":
+    from datetime import date
     from app.data_paths import build_raw_day_dir
+    from pathlib import Path
 
-    html_path = build_raw_day_dir("limitless", "cards_html") / "en_BLK_2.html"
+    partition_date = date(2026, 3, 29)
+
+    html_path = Path("Data") / "raw" / "limitless" / "cards_html" / "2026" / "03" / "29" / "en_BLK_2.html"
+
     html = html_path.read_text(encoding="utf-8")
 
     transformer = LimitlessTransformer()

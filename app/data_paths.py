@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 
@@ -18,3 +18,7 @@ def build_timestamped_name(prefix: str, ext: str) -> str:
     """
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"{prefix}_{ts}.{ext}"
+
+def build_staging_partition_dir(source: str, dataset: str, dt: date | datetime) -> Path:
+    d = dt.date() if isinstance(dt, datetime) else dt
+    return Path("Data") / "staging" / source / dataset / f"extract_date={d:%Y-%m-%d}"

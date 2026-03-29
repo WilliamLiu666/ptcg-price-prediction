@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.config import get_ebay_credentials, parse_bool_env
 from app.extract.ebay_extractor import EbayExtractor
 from app.load.ebay_loader import EbayLoader
 from app.transform.ebay_transformer import EbayTransformer
@@ -101,8 +102,15 @@ def main() -> None:
     """
     from app.extract.ebay_extractor import EbayAuth
 
-    auth = EbayAuth(client_id="", client_secret="", sandbox=False)
-    extractor = EbayExtractor(auth=auth, sandbox=False)
+    client_id, client_secret = get_ebay_credentials()
+    sandbox = parse_bool_env("EBAY_SANDBOX", default=False)
+
+    auth = EbayAuth(
+        client_id=client_id,
+        client_secret=client_secret,
+        sandbox=sandbox,
+    )
+    extractor = EbayExtractor(auth=auth, sandbox=sandbox)
     loader = EbayLoader(db_path="ptcg.sqlite")
 
     service = EbayPriceService(extractor=extractor, loader=loader)

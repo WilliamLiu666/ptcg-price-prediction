@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from app.config import get_ebay_credentials, parse_bool_env
 from app.extract.ebay_extractor import EbayAuth, EbayExtractor
 from app.load.ebay_loader import EbayLoader
 from app.services.ebay_price_service import EbayPriceService
@@ -113,11 +114,14 @@ def main() -> None:
     """
     Simple standalone entry point for this module.
     """
+    client_id, client_secret = get_ebay_credentials()
+    sandbox = parse_bool_env("EBAY_SANDBOX", default=False)
+
     job = EbayPriceJob(
         db_path="ptcg.sqlite",
-        client_id="",
-        client_secret="",
-        sandbox=False,
+        client_id=client_id,
+        client_secret=client_secret,
+        sandbox=sandbox,
     )
     job.run()
 

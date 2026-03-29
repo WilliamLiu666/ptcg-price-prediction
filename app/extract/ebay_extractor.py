@@ -6,6 +6,8 @@ from typing import Any
 
 import requests
 
+from app.config import get_ebay_credentials, parse_bool_env
+
 
 class EbayAuth:
     """
@@ -183,8 +185,17 @@ def main() -> None:
     """
     Simple standalone test for this module.
     """
-    auth = EbayAuth(client_id="", client_secret="", sandbox=False)
-    extractor = EbayExtractor(auth=auth, sandbox=False)
+    client_id, client_secret = get_ebay_credentials()
+    print(f"Client ID: {client_id}")
+    print(f"Client Secret: {client_secret}")
+    sandbox = parse_bool_env("EBAY_SANDBOX", default=False)
+
+    auth = EbayAuth(
+        client_id=client_id,
+        client_secret=client_secret,
+        sandbox=sandbox,
+    )
+    extractor = EbayExtractor(auth=auth, sandbox=sandbox)
 
     items = extractor.search_items(keyword="pokemon pikachu", limit=5)
     print(f"Fetched {len(items)} items.")

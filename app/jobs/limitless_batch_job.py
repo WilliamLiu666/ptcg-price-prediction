@@ -40,7 +40,7 @@ def main():
     """
 
     # ---------- 初始化 ETL ----------
-    extractor = LimitlessExtractor(html_dir=r"Data/Limitless")
+    extractor = LimitlessExtractor()
     transformer = LimitlessTransformer()
     loader = LimitlessLoader(db_path=DB_PATH)
 

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+
+from app.data_paths import build_raw_day_dir, build_timestamped_name
 
 
 class LimitlessExtractor:
@@ -25,7 +26,7 @@ class LimitlessExtractor:
 
     def __init__(
         self,
-        html_dir: str | Path,
+        html_dir: str | Path | None = None,
         timeout: int = 30,
         headers: dict | None = None,
     ) -> None:
@@ -40,7 +41,7 @@ class LimitlessExtractor:
             headers:
                 Optional custom HTTP headers.
         """
-        self.html_dir = Path(html_dir)
+        self.html_dir = Path(html_dir) if html_dir else build_raw_day_dir("limitless", "cards_html")
         self.html_dir.mkdir(parents=True, exist_ok=True)
 
         self.timeout = timeout
@@ -121,8 +122,7 @@ class LimitlessExtractor:
             path = self.html_dir / f"{filename}.html"
             self.save_html(html, str(path))
         else:
-            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-            path = self.html_dir / f"page_{ts}.html"
+            path = self.html_dir / build_timestamped_name(prefix="page", ext="html")
             self.save_html(html, str(path))
 
         context = {
@@ -151,7 +151,7 @@ class LimitlessExtractor:
 
 
 if __name__ == "__main__":
-    extractor = LimitlessExtractor(html_dir=r"Data/Limitless")
+    extractor = LimitlessExtractor()
 
     html, context = extractor.fetch_html(
         lang="en",

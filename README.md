@@ -1,5 +1,17 @@
 # PTCG Price Prediction
 
+## Raw data layout
+
+Raw extractor responses are stored as immutable snapshots under:
+
+`Data/raw/<source>/<dataset>/YYYY/MM/DD/`
+
+Examples:
+
+- `Data/raw/limitless/cards_html/2026/03/29/`
+- `Data/raw/cardrush/product_group_html/2026/03/29/`
+- `Data/raw/hareruya/collections/2026/03/29/`
+
 ## eBay credentials setup
 
 This project now auto-loads a local `.env` file from the repository root.

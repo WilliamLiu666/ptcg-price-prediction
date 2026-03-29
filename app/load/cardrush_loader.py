@@ -12,11 +12,13 @@ class CardrushLoader:
 
         now = datetime.now(timezone.utc)
         observed_at = now.isoformat()
+        observed_date = now.date().isoformat()
         written = 0
 
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA synchronous=NORMAL;")
+            self._ensure_schema(conn)
             cur = conn.cursor()
 
             for it in items:
@@ -65,13 +67,20 @@ class CardrushLoader:
 
                 cur.execute("""
                 INSERT INTO prices_cardrush (
-                    product_id, observed_at, price_yen
+                    product_id, observed_at, observed_date, price_yen
                 )
-                VALUES (?, ?, ?)
-                """, (product_id, observed_at, price_yen))
+                VALUES (?, ?, ?, ?)
+                """, (product_id, observed_at, observed_date, price_yen))
 
                 written += 1
 
             conn.commit()
 
         return written
+
+    @staticmethod
+    def _ensure_schema(conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("PRAGMA table_info(prices_cardrush)")
+        existing = {str(row[1]) for row in cursor.fetchall()}
+        if "observed_date" not in existing:
+            conn.execute("ALTER TABLE prices_cardrush ADD COLUMN observed_date TEXT")

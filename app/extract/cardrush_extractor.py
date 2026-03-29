@@ -1,9 +1,9 @@
 import re
-from datetime import datetime, timezone
 from pathlib import Path
-from urllib import response
 
 import requests
+
+from app.data_paths import build_raw_day_dir, build_timestamped_name
 
 
 class CardrushExtractor:
@@ -22,7 +22,7 @@ class CardrushExtractor:
     """
 
     def __init__(self, html_dir: str | None = None):
-        self.html_dir = Path(html_dir) if html_dir else None
+        self.html_dir = Path(html_dir) if html_dir else build_raw_day_dir("cardrush", "product_group_html")
 
         # 比只放 User-Agent 更完整一些
         self.headers = {
@@ -77,8 +77,7 @@ class CardrushExtractor:
             self.save_html(html, str(path))
         elif self.html_dir:
             self.html_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-            path = self.html_dir / f"page_{ts}.html"
+            path = self.html_dir / build_timestamped_name(prefix="page", ext="html")
             self.save_html(html, str(path))
 
         return html, product_group
@@ -90,7 +89,7 @@ class CardrushExtractor:
 
 
 if __name__ == "__main__":
-    extractor = CardrushExtractor(html_dir="cardrush")
+    extractor = CardrushExtractor()
     url = "https://www.cardrush-pokemon.jp/product-group/268"
 
     html, product_group = extractor.fetch_html(url, filename="group268")

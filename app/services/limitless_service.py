@@ -77,7 +77,7 @@ class LimitlessService:
 
 
 if __name__ == "__main__":
-    extractor = LimitlessExtractor(html_dir="Limitless")
+    extractor = LimitlessExtractor()
     transformer = LimitlessTransformer()
     loader = LimitlessLoader(db_path="ptcg.sqlite")
 

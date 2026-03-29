@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -38,6 +39,53 @@ class EbayLoader:
         conn.execute("PRAGMA foreign_keys=ON;")
         return conn
 
+    def ensure_ebay_columns(self) -> None:
+        """
+        Ensure eBay timestamp columns/history exist.
+        """
+        with self._connect() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS prices_limitless (
+                  card_id       INTEGER PRIMARY KEY,
+                  lang          TEXT NOT NULL,
+                  set_code      TEXT NOT NULL,
+                  card_code     TEXT NOT NULL,
+                  ebay_price    REAL
+                );
+                """
+            )
+            self._ensure_column(conn, "prices_limitless", "ebay_price", "REAL")
+            self._ensure_column(conn, "prices_limitless", "ebay_observed_at", "TEXT")
+            self._ensure_column(conn, "prices_limitless", "ebay_observed_date", "TEXT")
+            self._ensure_column(conn, "prices_limitless", "updated_at", "TEXT")
+
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS prices_ebay_history (
+                  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                  card_id            INTEGER,
+                  lang               TEXT NOT NULL,
+                  set_code           TEXT NOT NULL,
+                  card_code          TEXT NOT NULL,
+                  ebay_price         REAL,
+                  ebay_observed_at   TEXT NOT NULL,
+                  ebay_observed_date TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_prices_ebay_history_card_date
+                  ON prices_ebay_history(card_id, ebay_observed_date);
+                """
+            )
+            conn.commit()
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_type: str) -> None:
+        cursor = conn.execute(f"PRAGMA table_info({table})")
+        existing = {str(row[1]) for row in cursor.fetchall()}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+
     def update_ebay_price(
         self,
         lang: str,
@@ -61,15 +109,36 @@ class EbayLoader:
         Returns:
             Number of updated rows.
         """
+        self.ensure_ebay_columns()
+        now = datetime.now(timezone.utc)
+        observed_at = now.isoformat()
+        observed_date = now.date().isoformat()
+
         with self._connect() as conn:
             cursor = conn.execute(
                 """
                 UPDATE prices_limitless
-                SET ebay_price = ?
+                SET ebay_price = ?,
+                    ebay_observed_at = ?,
+                    ebay_observed_date = ?,
+                    updated_at = ?
                 WHERE lang = ? AND set_code = ? AND card_code = ?
                 """,
-                (ebay_price, lang, set_code, card_code),
+                (ebay_price, observed_at, observed_date, observed_at, lang, set_code, card_code),
             )
+            if cursor.rowcount > 0:
+                conn.execute(
+                    """
+                    INSERT INTO prices_ebay_history
+                    (
+                      card_id, lang, set_code, card_code, ebay_price, ebay_observed_at, ebay_observed_date
+                    )
+                    SELECT card_id, lang, set_code, card_code, ebay_price, ebay_observed_at, ebay_observed_date
+                    FROM prices_limitless
+                    WHERE lang = ? AND set_code = ? AND card_code = ?
+                    """,
+                    (lang, set_code, card_code),
+                )
             conn.commit()
             return cursor.rowcount
 

@@ -207,9 +207,9 @@ class LimitlessTransformer:
 
 
 if __name__ == "__main__":
-    from pathlib import Path
+    from app.data_paths import build_raw_day_dir
 
-    html_path = Path("Data/Limitless/en_BLK_2.html")
+    html_path = build_raw_day_dir("limitless", "cards_html") / "en_BLK_2.html"
     html = html_path.read_text(encoding="utf-8")
 
     transformer = LimitlessTransformer()

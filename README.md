@@ -12,6 +12,26 @@ Examples:
 - `Data/raw/cardrush/product_group_html/2026/03/29/`
 - `Data/raw/hareruya/collections/2026/03/29/`
 
+## Staging (Parquet)
+
+Normalized Limitless rows are written under:
+
+`Data/staging/limitless/<dataset>/extract_date=YYYY-MM-DD/<lang>_<set>_<card>.parquet`
+
+Datasets: `cards_normalized`, `card_index`, `price_events`. Each row includes `source`, `dataset`, `extract_date`, `observed_at`, and `observed_date`.
+
+Install Parquet dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Run the Limitless batch with a partition date (defaults to `EXTRACT_DATE` env or today UTC):
+
+```bash
+python -m app.jobs.limitless_batch_job --extract-date 2026-03-29
+```
+
 ## eBay credentials setup
 
 This project now auto-loads a local `.env` file from the repository root.

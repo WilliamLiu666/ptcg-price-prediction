@@ -24,12 +24,12 @@ def _coerce_optional_int(value: Any) -> int | None:
         return None
 
 
-class LimitlessStagingLoader:
+class HareruyaStagingLoader:
     """
-    Load layer for Limitless staging.
+    Load layer for Hareruya staging.
 
     Responsibilities:
-    - Write normalized Limitless records into staging parquet
+    - Write normalized Hareruya records into staging parquet
     - Keep cards_normalized and price_events partitioned by extract_date
     - Keep card_index in a fixed non-partitioned directory
     - Support optional overwrite control for card_index
@@ -63,9 +63,9 @@ class LimitlessStagingLoader:
         """
         Fixed directory for latest card index records.
         Example:
-            Data/staging/limitless/card_index/en_BLK_2.parquet
+            Data/staging/hareruya/card_index/M2_001.parquet
         """
-        return self._base_data_root() / "staging" / "limitless" / "card_index"
+        return self._base_data_root() / "staging" / "hareruya" / "card_index"
 
     @staticmethod
     def _normalize_extract_date(dt: date | datetime | str) -> date:
@@ -76,21 +76,47 @@ class LimitlessStagingLoader:
         return datetime.fromisoformat(dt).date()
 
     @staticmethod
-    def _normalize_limitless_record(record: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_hareruya_record(record: dict[str, Any]) -> dict[str, Any]:
         """
-        Coerce IDs to int when possible so Parquet schemas stay stable across runs.
+        Coerce selected ID-like fields to int when possible so Parquet schemas stay stable.
         """
         row = dict(record)
-        row["card_id"] = _coerce_optional_int(row.get("card_id"))
-        row["data_id"] = _coerce_optional_int(row.get("data_id"))
+
+        row["product_id"] = _coerce_optional_int(row.get("product_id"))
+        row["variant_id"] = _coerce_optional_int(row.get("variant_id"))
+        row["collection_id"] = _coerce_optional_int(row.get("collection_id"))
+        row["card_number_int"] = _coerce_optional_int(row.get("card_number"))
+        row["total_in_set_int"] = _coerce_optional_int(row.get("total_in_set"))
+        row["zukan_number_int"] = _coerce_optional_int(row.get("zukan_number"))
+
         return row
 
     @staticmethod
-    def _build_record_filename(record: dict[str, Any]) -> str:
-        lang = str(record["lang"]).strip()
-        set_code = str(record["set_code"]).strip()
-        card_code = str(record["card_code"]).strip()
-        return f"{lang}_{set_code}_{card_code}.parquet"
+    def _safe_str(value: Any, default: str = "unknown") -> str:
+        if value is None:
+            return default
+        text = str(value).strip()
+        return text if text else default
+
+    def _build_record_filename(self, record: dict[str, Any]) -> str:
+        """
+        Prefer business key:
+            set_code + card_number
+        Fallback:
+            handle or product_id
+        """
+        set_code = self._safe_str(record.get("set_code"), default="unknown")
+        card_number = self._safe_str(record.get("card_number"), default="unknown")
+
+        if set_code != "unknown" and card_number != "unknown":
+            return f"{set_code}_{card_number}.parquet"
+
+        handle = self._safe_str(record.get("handle"), default="")
+        if handle:
+            return f"{handle}.parquet"
+
+        product_id = self._safe_str(record.get("product_id"), default="unknown")
+        return f"{product_id}.parquet"
 
     @staticmethod
     def _write_parquet(df: pd.DataFrame, out_path: Path) -> Path:
@@ -124,7 +150,7 @@ class LimitlessStagingLoader:
         else:
             if partition_date is None:
                 raise ValueError(f"partition_date is required for dataset: {dataset}")
-            out_dir = self._partition_dir("limitless", dataset, partition_date)
+            out_dir = self._partition_dir("hareruya", dataset, partition_date)
 
         filename = self._build_record_filename(row)
         out_path = out_dir / filename
@@ -138,7 +164,7 @@ class LimitlessStagingLoader:
     @staticmethod
     def _staging_meta(dataset: str, partition_date: date, observed_at: str) -> dict[str, str]:
         return {
-            "source": "limitless",
+            "source": "hareruya",
             "dataset": dataset,
             "extract_date": partition_date.isoformat(),
             "observed_at": observed_at,
@@ -146,41 +172,65 @@ class LimitlessStagingLoader:
         }
 
     def _row_card_index(self, norm: dict[str, Any], meta: dict[str, str]) -> dict[str, Any]:
+        """
+        Stable card identity fields.
+        Usually less frequently changed than price.
+        """
         return {
             **meta,
-            "card_id": norm.get("card_id"),
-            "data_id": norm.get("data_id"),
-            "lang": norm.get("lang"),
+            "collection_id": norm.get("collection_id"),
+            "product_id": norm.get("product_id"),
+            "handle": norm.get("handle"),
             "set_code": norm.get("set_code"),
-            "card_code": norm.get("card_code"),
-            "card_name": norm.get("card_name"),
+            "card_number": norm.get("card_number"),
+            "card_number_int": norm.get("card_number_int"),
+            "total_in_set": norm.get("total_in_set"),
+            "total_in_set_int": norm.get("total_in_set_int"),
+            "card_name_jp": norm.get("card_name_jp"),
+            "card_name_en": norm.get("card_name_en"),
+            "body_name_jp": norm.get("body_name_jp"),
             "rarity": norm.get("rarity"),
-            "card_path": norm.get("card_path"),
+            "card_type_jp": norm.get("card_type_jp"),
+            "zukan_number": norm.get("zukan_number"),
+            "zukan_number_int": norm.get("zukan_number_int"),
+            "product_url": norm.get("product_url"),
+            "image_url": norm.get("image_url"),
         }
 
     def _row_price_events(self, norm: dict[str, Any], meta: dict[str, str]) -> dict[str, Any]:
+        """
+        Event-like commercial fields that may change over time.
+        """
         return {
             **meta,
-            "card_id": norm.get("card_id"),
-            "lang": norm.get("lang"),
+            "collection_id": norm.get("collection_id"),
+            "product_id": norm.get("product_id"),
+            "variant_id": norm.get("variant_id"),
+            "handle": norm.get("handle"),
             "set_code": norm.get("set_code"),
-            "card_code": norm.get("card_code"),
-            "usd_price": norm.get("usd_price"),
-            "eur_price": norm.get("eur_price"),
+            "card_number": norm.get("card_number"),
+            "card_name_jp": norm.get("card_name_jp"),
+            "card_name_en": norm.get("card_name_en"),
+            "rarity": norm.get("rarity"),
+            "price_jpy": norm.get("price_jpy"),
+            "compare_at_price_jpy": norm.get("compare_at_price_jpy"),
+            "available": norm.get("available"),
+            "currency": norm.get("currency"),
+            "product_url": norm.get("product_url"),
         }
 
-    def write_limitless_record(
+    def write_hareruya_record(
         self,
         record: dict[str, Any],
         extract_date: date | datetime | str,
         overwrite_card_index: bool = False,
     ) -> dict[str, Path]:
         """
-        Write all Limitless staging slices for one card in one pass.
+        Write all Hareruya staging slices for one card in one pass.
 
         Args:
             record:
-                One normalized Limitless card record.
+                One normalized Hareruya card record.
             extract_date:
                 Business extract date.
             overwrite_card_index:
@@ -192,7 +242,7 @@ class LimitlessStagingLoader:
         """
         partition_date = self._normalize_extract_date(extract_date)
         observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        norm = self._normalize_limitless_record(record)
+        norm = self._normalize_hareruya_record(record)
 
         cards_row = {
             **norm,
@@ -237,7 +287,7 @@ class LimitlessStagingLoader:
 
         for rec in records:
             observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            norm = self._normalize_limitless_record(rec)
+            norm = self._normalize_hareruya_record(rec)
             meta = self._staging_meta("cards_normalized", partition_date, observed_at)
             row = {**norm, **meta}
             paths.append(
@@ -271,7 +321,7 @@ class LimitlessStagingLoader:
 
         for rec in records:
             observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            norm = self._normalize_limitless_record(rec)
+            norm = self._normalize_hareruya_record(rec)
             meta = self._staging_meta("card_index", partition_date, observed_at)
             row = self._row_card_index(norm, meta)
             paths.append(
@@ -294,7 +344,7 @@ class LimitlessStagingLoader:
 
         for rec in records:
             observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            norm = self._normalize_limitless_record(rec)
+            norm = self._normalize_hareruya_record(rec)
             meta = self._staging_meta("price_events", partition_date, observed_at)
             row = self._row_price_events(norm, meta)
             paths.append(
@@ -312,35 +362,49 @@ class LimitlessStagingLoader:
 if __name__ == "__main__":
     sample_records = [
         {
-            "card_id": "124",
-            "data_id": "456",
-            "lang": "en",
-            "set_code": "BLK",
-            "card_code": "2",
-            "card_name": "Sample Card",
-            "rarity": "Uncommon",
-            "usd_price": 1.25,
-            "eur_price": 1.10,
-            "card_path": "/cards/en/BLK/2",
+            "source": "hareruya",
+            "collection_id": "706",
+            "source_url": "https://www.hareruya2.com/collections/706",
+            "final_url": "https://www.hareruya2.com/collections/706",
+            "product_id": "9921823932736",
+            "handle": "9921823932736",
+            "title_raw": "ナゾノクサ(C){草}〈001/080〉[M2]",
+            "card_name_jp": "ナゾノクサ",
+            "card_name_en": "Oddish",
+            "body_name_jp": "ナゾノクサ",
+            "rarity": "C",
+            "card_type_jp": "草",
+            "card_number": "001",
+            "total_in_set": "080",
+            "set_code": "M2",
+            "zukan_number": "43",
+            "variant_id": "51084242288960",
+            "price_jpy": 30.0,
+            "compare_at_price_jpy": 50.0,
+            "available": True,
+            "currency": "JPY",
+            "product_url": "https://www.hareruya2.com/products/9921823932736",
+            "image_url": "https://cdn.shopify.com/example.webp",
+            "tags": ["MEGAシリーズ", "同名検索:ナゾノクサ"],
         }
     ]
 
-    loader = LimitlessStagingLoader()
+    loader = HareruyaStagingLoader()
 
     print("=== default: do NOT overwrite existing card_index ===")
     for rec in sample_records:
-        written = loader.write_limitless_record(
+        written = loader.write_hareruya_record(
             rec,
-            extract_date="2026-03-29",
+            extract_date="2026-03-30",
         )
         for name, path in written.items():
             print(f"Written {name}: {path}")
 
     print("\n=== force overwrite card_index ===")
     for rec in sample_records:
-        written = loader.write_limitless_record(
+        written = loader.write_hareruya_record(
             rec,
-            extract_date="2026-03-29",
+            extract_date="2026-03-30",
             overwrite_card_index=True,
         )
         for name, path in written.items():

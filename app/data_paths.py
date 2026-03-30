@@ -19,6 +19,16 @@ def build_timestamped_name(prefix: str, ext: str) -> str:
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"{prefix}_{ts}.{ext}"
 
-def build_staging_partition_dir(source: str, dataset: str, dt: date | datetime) -> Path:
+def build_staging_partition_dir(
+    source: str,
+    dataset: str,
+    dt: date | datetime,
+    *,
+    data_root: Path | str | None = None,
+) -> Path:
+    """
+    Build staging path: <data_root>/staging/<source>/<dataset>/extract_date=YYYY-MM-DD
+    """
+    root = Path(data_root) if data_root is not None else Path("Data")
     d = dt.date() if isinstance(dt, datetime) else dt
-    return Path("Data") / "staging" / source / dataset / f"extract_date={d:%Y-%m-%d}"
+    return root / "staging" / source / dataset / f"extract_date={d:%Y-%m-%d}"

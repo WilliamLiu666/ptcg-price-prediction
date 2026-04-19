@@ -29,7 +29,12 @@ class LimitlessTransformer:
         """
         return BeautifulSoup(html, "html.parser")
 
-    def extract_hrefs(self, html: str, prefix: str = "/cards/") -> list[dict[str, str]]:
+    def extract_hrefs(
+        self,
+        html: str,
+        prefix: str = "/cards/",
+        default_lang: str | None = None,
+    ) -> list[dict[str, str]]:
         """
         Extract internal card hrefs from the page.
 
@@ -38,6 +43,9 @@ class LimitlessTransformer:
                 Raw HTML string.
             prefix:
                 Only keep hrefs starting with this prefix.
+            default_lang:
+                Optional language to use when a Limitless href omits the explicit
+                language segment, e.g. ``/cards/BLK/84``.
 
         Returns:
             A list of dictionaries containing:
@@ -56,11 +64,17 @@ class LimitlessTransformer:
             parsed = urlparse(href)
             parts = parsed.path.strip("/").split("/")
 
-            # Expected format: /cards/{lang}/{set_code}/{card_code}
-            if len(parts) != 4 or parts[0] != "cards":
+            if not parts or parts[0] != "cards":
                 continue
 
-            _, lang, set_code, card_code = parts
+            if len(parts) == 4:
+                _, lang, set_code, card_code = parts
+            elif len(parts) == 3 and default_lang:
+                _, set_code, card_code = parts
+                lang = default_lang
+            else:
+                continue
+
             out.append({
                 "lang": lang,
                 "set_code": set_code,

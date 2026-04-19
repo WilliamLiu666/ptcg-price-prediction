@@ -71,6 +71,13 @@ class LimitlessExtractor:
             url += "?translate=en"
         return url
 
+    @staticmethod
+    def build_set_url(lang: str, set_code: str) -> str:
+        """
+        Build the Limitless set listing URL used to discover card codes.
+        """
+        return f"https://limitlesstcg.com/cards/{lang}/{set_code}"
+
     def fetch_html(
         self,
         lang: str,
@@ -130,6 +137,42 @@ class LimitlessExtractor:
             "set_code": set_code,
             "card_code": card_code,
             "card_path": card_path,
+        }
+
+        return html, context
+
+    def fetch_set_html(
+        self,
+        lang: str,
+        set_code: str,
+        filename: str | None = None,
+        save_to: str | None = None,
+    ) -> tuple[str, dict[str, str | None]]:
+        """
+        Fetch raw HTML from a Limitless set listing page.
+        """
+        url = self.build_set_url(lang=lang, set_code=set_code)
+
+        m = re.search(r"(\/cards\/[^?#]+)", url)
+        set_path = m.group(1) if m else None
+
+        response = self.session.get(url, timeout=self.timeout)
+        response.raise_for_status()
+        html = response.text
+
+        if save_to:
+            self.save_html(html, save_to)
+        elif filename:
+            path = self.html_dir / f"{filename}.html"
+            self.save_html(html, str(path))
+        else:
+            path = self.html_dir / build_timestamped_name(prefix="set", ext="html")
+            self.save_html(html, str(path))
+
+        context = {
+            "lang": lang,
+            "set_code": set_code,
+            "set_path": set_path,
         }
 
         return html, context

@@ -1,0 +1,26 @@
+{
+  "products": [
+    {
+      "id": 103,
+      "title": "Card Three",
+      "handle": "card-three",
+      "variants": [
+        {
+          "id": 1003,
+          "price": "50"
+        }
+      ]
+    },
+    {
+      "id": 104,
+      "title": "Card Four",
+      "handle": "card-four",
+      "variants": [
+        {
+          "id": 1004,
+          "price": "60"
+        }
+      ]
+    }
+  ]
+}

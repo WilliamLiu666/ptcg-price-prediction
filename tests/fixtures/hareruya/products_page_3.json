@@ -1,0 +1,15 @@
+{
+  "products": [
+    {
+      "id": 105,
+      "title": "Card Five",
+      "handle": "card-five",
+      "variants": [
+        {
+          "id": 1005,
+          "price": "70"
+        }
+      ]
+    }
+  ]
+}

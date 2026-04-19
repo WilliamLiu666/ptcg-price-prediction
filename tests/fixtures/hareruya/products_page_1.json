@@ -1,0 +1,26 @@
+{
+  "products": [
+    {
+      "id": 101,
+      "title": "Card One",
+      "handle": "card-one",
+      "variants": [
+        {
+          "id": 1001,
+          "price": "30"
+        }
+      ]
+    },
+    {
+      "id": 102,
+      "title": "Card Two",
+      "handle": "card-two",
+      "variants": [
+        {
+          "id": 1002,
+          "price": "40"
+        }
+      ]
+    }
+  ]
+}

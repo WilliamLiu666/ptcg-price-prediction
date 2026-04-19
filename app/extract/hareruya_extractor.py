@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import requests
 
@@ -73,26 +74,81 @@ class HareruyaExtractor:
         collection_url: str,
         filename: str | None = None,
         save_to: str | None = None,
+        page_limit: int = 250,
+        max_pages: int | None = None,
     ) -> tuple[dict[str, Any], dict[str, str | None]]:
         """
-        Fetch raw JSON from Shopify collection products endpoint.
+        Fetch and combine Shopify collection product pages into one payload.
+
+        Stops when:
+        - a page returns fewer than ``page_limit`` products
+        - a page returns zero products
+        - a repeated page fingerprint is detected
+        - ``max_pages`` is reached
         """
-        json_url = collection_url.rstrip("/") + "/products.json?limit=250"
-        response = self.session.get(json_url, timeout=self.timeout)
-        response.raise_for_status()
-        payload = response.json()
-        context = self._build_context(collection_url, final_url=response.url)
+        combined_products: list[dict[str, Any]] = []
+        combined_payload: dict[str, Any] | None = None
+        final_url: str = collection_url.rstrip("/") + "/products.json"
+        seen_fingerprints: set[tuple[str | int | None, ...]] = set()
+        page = 1
+        pages_fetched = 0
+
+        while True:
+            payload, response_url = self._fetch_products_json_page(
+                collection_url=collection_url,
+                page=page,
+                limit=page_limit,
+            )
+            final_url = response_url
+
+            raw_products = payload.get("products")
+            if not isinstance(raw_products, list):
+                raise ValueError(
+                    f"Unexpected Hareruya payload for page {page}: missing products list"
+                )
+
+            if combined_payload is None:
+                combined_payload = dict(payload)
+                combined_payload["products"] = combined_products
+
+            if not raw_products:
+                break
+
+            fingerprint = self._page_fingerprint(raw_products)
+            if fingerprint in seen_fingerprints:
+                break
+            seen_fingerprints.add(fingerprint)
+
+            combined_products.extend(
+                product for product in raw_products if isinstance(product, dict)
+            )
+            pages_fetched += 1
+
+            if len(raw_products) < page_limit:
+                break
+
+            page += 1
+            if max_pages is not None and page > max_pages:
+                break
+
+        if combined_payload is None:
+            combined_payload = {"products": []}
+
+        combined_payload["products"] = combined_products
+        context = self._build_context(collection_url, final_url=final_url)
+        context["page_count"] = str(pages_fetched)
+        context["product_count"] = str(len(combined_products))
 
         if save_to:
-            self.save_json(payload, save_to)
+            self.save_json(combined_payload, save_to)
         elif filename:
             path = self.html_dir / f"{filename}.json"
-            self.save_json(payload, str(path))
+            self.save_json(combined_payload, str(path))
         else:
             path = self._build_output_path(collection_url=collection_url, ext="json")
-            self.save_json(payload, str(path))
+            self.save_json(combined_payload, str(path))
 
-        return payload, context
+        return combined_payload, context
 
     def extract_products_from_payload(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         """
@@ -180,6 +236,37 @@ class HareruyaExtractor:
             "source_url": url,
             "final_url": final_url,
         }
+
+    @staticmethod
+    def _page_fingerprint(products: list[Any]) -> tuple[str | int | None, ...]:
+        """
+        Build a lightweight page signature so we can detect repeated pages.
+        """
+        ids: list[str | int | None] = []
+        for product in products[:3]:
+            if isinstance(product, dict):
+                ids.append(product.get("id"))
+        return tuple(ids)
+
+    @staticmethod
+    def _build_products_json_url(collection_url: str, page: int, limit: int) -> str:
+        query = urlencode({"limit": limit, "page": page})
+        return collection_url.rstrip("/") + f"/products.json?{query}"
+
+    def _fetch_products_json_page(
+        self,
+        collection_url: str,
+        page: int,
+        limit: int,
+    ) -> tuple[dict[str, Any], str]:
+        json_url = self._build_products_json_url(
+            collection_url=collection_url,
+            page=page,
+            limit=limit,
+        )
+        response = self.session.get(json_url, timeout=self.timeout)
+        response.raise_for_status()
+        return response.json(), response.url
 
     def _build_output_path(self, collection_url: str, ext: str) -> Path:
         collection_id = collection_url.rstrip("/").split("/")[-1] or "unknown"

@@ -9,6 +9,7 @@ Raw extractor responses are stored as immutable snapshots under:
 Examples:
 
 - `Data/raw/limitless/cards_html/2026/03/29/`
+- `Data/raw/limitless/sets_html/2026/03/29/`
 - `Data/raw/cardrush/product_group_html/2026/03/29/`
 - `Data/raw/hareruya/collections/2026/03/29/`
 
@@ -31,6 +32,10 @@ Run the Limitless batch with a partition date (defaults to `EXTRACT_DATE` env or
 ```bash
 python -m app.jobs.limitless_batch_job --extract-date 2026-03-29
 ```
+
+The Limitless batch now also caches the set listing page for each series under
+`Data/raw/limitless/sets_html/...` so it can discover the actual card codes for
+that set instead of assuming the codes are always a perfect `1..size` range.
 
 ## eBay credentials setup
 
@@ -77,3 +82,17 @@ export EBAY_SANDBOX="false"
 ```
 
 If credentials are missing, the job now fails early with a clear error.
+
+## Tests
+
+There is a small `unittest` fixture suite under `tests/` covering:
+
+- Limitless card-page parsing
+- Limitless set-listing card-code discovery
+- Hareruya paginated `products.json` aggregation
+
+Run it with:
+
+```bash
+python -m unittest discover -s tests
+```

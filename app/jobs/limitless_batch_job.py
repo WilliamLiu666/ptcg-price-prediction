@@ -4,6 +4,7 @@ import argparse
 import os
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 
 from app.extract.limitless_extractor import LimitlessExtractor
 from app.transform.limitless_transformer import LimitlessTransformer
@@ -12,6 +13,7 @@ from app.services.limitless_service import LimitlessService
 
 
 DB_PATH = "ptcg.sqlite"
+RAW_SET_HTML_BASE_DIR = "Data/raw/limitless/sets_html"
 
 
 def resolve_extract_date(cli_value: str | None) -> str:
@@ -52,6 +54,98 @@ def load_series_records(db_path: str):
         ).fetchall()
 
     return rows
+
+
+def build_set_html_path(
+    raw_set_html_base_dir: str | Path,
+    extract_date: str,
+    lang: str,
+    set_code: str,
+) -> Path:
+    dt = datetime.fromisoformat(extract_date).date()
+    return (
+        Path(raw_set_html_base_dir)
+        / f"{dt.year:04d}"
+        / f"{dt.month:02d}"
+        / f"{dt.day:02d}"
+        / f"{lang}_{set_code}.html"
+    )
+
+
+def discover_card_codes(
+    extractor: LimitlessExtractor,
+    transformer: LimitlessTransformer,
+    *,
+    lang: str,
+    set_code: str,
+    size: int,
+    extract_date: str,
+    raw_set_html_base_dir: str | Path = RAW_SET_HTML_BASE_DIR,
+) -> list[str]:
+    """
+    Discover card codes from the Limitless set listing page.
+
+    Falls back to the historical ``1..size`` range when discovery fails or
+    returns no card links.
+    """
+    set_html_path = build_set_html_path(
+        raw_set_html_base_dir=raw_set_html_base_dir,
+        extract_date=extract_date,
+        lang=lang,
+        set_code=set_code,
+    )
+
+    try:
+        if set_html_path.exists():
+            set_html = set_html_path.read_text(encoding="utf-8")
+            print(f"[discover] reused local set html: {set_html_path}")
+        else:
+            set_html, _ = extractor.fetch_set_html(
+                lang=lang,
+                set_code=set_code,
+                filename=set_html_path.stem,
+                save_to=str(set_html_path),
+            )
+            print(f"[discover] fetched set html from web: {set_html_path}")
+
+        href_rows = transformer.extract_hrefs(
+            set_html,
+            prefix="/cards/",
+            default_lang=lang,
+        )
+
+        seen_codes: set[str] = set()
+        card_codes: list[str] = []
+        for row in href_rows:
+            row_lang = str(row.get("lang", "")).strip()
+            row_set_code = str(row.get("set_code", "")).strip()
+            card_code = str(row.get("card_code", "")).strip()
+            if not card_code or row_lang != lang or row_set_code != set_code:
+                continue
+            if card_code in seen_codes:
+                continue
+            seen_codes.add(card_code)
+            card_codes.append(card_code)
+
+        if card_codes:
+            if size > 0 and len(card_codes) != size:
+                print(
+                    f"[discover] size mismatch for {lang}/{set_code}: "
+                    f"db_size={size} discovered={len(card_codes)}"
+                )
+            return card_codes
+
+        print(
+            f"[discover] no card links found for {lang}/{set_code}; "
+            f"falling back to db size"
+        )
+    except Exception as exc:
+        print(
+            f"[discover] failed for {lang}/{set_code}: {exc}; "
+            f"falling back to db size"
+        )
+
+    return [str(card_code) for card_code in range(1, size + 1)]
 
 
 def main() -> None:
@@ -103,11 +197,21 @@ def main() -> None:
         series_code = r["series_code"]
         lang = r["lang"]
         size = int(r["size"])
+        card_codes = discover_card_codes(
+            extractor=extractor,
+            transformer=transformer,
+            lang=lang,
+            set_code=series_code,
+            size=size,
+            extract_date=extract_date,
+        )
 
-        print(f"\n[Series] {series_code} lang={lang} size={size}")
+        print(
+            f"\n[Series] {series_code} lang={lang} size={size} "
+            f"card_codes={len(card_codes)}"
+        )
 
-        for card_code in range(1, size + 1):
-            card_code_str = str(card_code)
+        for card_code_str in card_codes:
 
             try:
                 record = service.run_one(

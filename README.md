@@ -85,16 +85,50 @@ python -m app.jobs.ebay_batch_job --extract-date 2026-03-29
 
 The eBay batch now also caches raw search responses under
 `Data/raw/ebay/search_json/...` and writes normalized staging parquet under
-`Data/staging/ebay/...`, while still updating `prices_limitless.ebay_price`.
+`Data/staging/ebay/...`, while still updating the `prices_limitless.ebay_price`
+column in PostgreSQL.
 
-## SQLite price tables
+## PostgreSQL price tables
 
-SQLite keeps source-specific current/history tables instead of one shared price table:
+PostgreSQL keeps source-specific current/history tables instead of one shared price table:
 
 - `prices_limitless` and `prices_limitless_history`
 - `prices_ebay_current` and `prices_ebay_history`
 - `prices_cardrush_current` and `prices_cardrush`
 - `prices_hareruya_current` and `prices_hareruya_history`
+
+## Local PostgreSQL via Docker
+
+The repository includes a local PostgreSQL setup under [`docker/`](<E:/PTCG/ptcg-price-prediction/docker>), and the app now uses PostgreSQL as its runtime database.
+
+Bring it up from the repo root:
+
+```bash
+docker compose -f docker/compose.yml up -d
+```
+
+Or run it from inside the `docker/` directory:
+
+```bash
+cd docker
+docker compose up -d
+```
+
+The compose service now reads its credentials from [`docker/.env`](<E:/PTCG/ptcg-price-prediction/docker/.env>) through `env_file`, so the database name/user/password are no longer hard-coded in the compose YAML.
+
+Initialization SQL lives under [`docker/postgres/init/01_schema.sql`](<E:/PTCG/ptcg-price-prediction/docker/postgres/init/01_schema.sql>), and the connection smoke test lives at [`docker/scripts/test_postgres_connection.py`](<E:/PTCG/ptcg-price-prediction/docker/scripts/test_postgres_connection.py>).
+
+If you already have a populated SQLite database at [`ptcg.sqlite`](<E:/PTCG/ptcg-price-prediction/ptcg.sqlite>), import it into PostgreSQL with:
+
+```bash
+python -m app.scripts.migrate_sqlite_to_postgres --truncate-existing
+```
+
+That command:
+
+- creates the PostgreSQL app tables if needed
+- truncates the managed PostgreSQL tables when `--truncate-existing` is passed
+- copies the existing SQLite data into PostgreSQL using upserts where appropriate
 
 ### Optional: set directly in shell (overrides `.env`)
 
@@ -122,7 +156,15 @@ There is a small `unittest` fixture suite under `tests/` covering:
 
 - Limitless card-page parsing
 - Limitless set-listing card-code discovery
+- PostgreSQL loader/schema writes
 - Hareruya paginated `products.json` aggregation
+
+Make sure the local PostgreSQL container is running first:
+
+```bash
+docker compose -f docker/compose.yml up -d
+python docker/scripts/test_postgres_connection.py
+```
 
 Run it with:
 

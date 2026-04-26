@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,10 +12,10 @@ from app.transform.limitless_transformer import LimitlessTransformer
 from app.load.limitless_staging_loader import LimitlessStagingLoader
 from app.services.limitless_service import LimitlessService
 from app.utils.extract_policy import resolve_extract_mode
-from app.utils.sqlite_schema import connect_sqlite
+from app.utils.postgres_db import connect_postgres, dict_cursor
+from app.utils.postgres_schema import ensure_app_schema
 
 
-DB_PATH = "ptcg.sqlite"
 RAW_SET_HTML_BASE_DIR = "Data/raw/limitless/sets_html"
 
 
@@ -36,7 +35,7 @@ def resolve_extract_date(cli_value: str | None) -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
-def load_series_records(db_path: str):
+def load_series_records():
     """
     Load all series records from DB.
 
@@ -46,18 +45,19 @@ def load_series_records(db_path: str):
         - lang
         - size
     """
-    with closing(connect_sqlite(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            """
-            SELECT series_code, lang, size
-            FROM series_limitless
-            WHERE size IS NOT NULL AND size > 0
-            ORDER BY series_code, lang
-            """
-        ).fetchall()
-
-    return rows
+    with closing(connect_postgres()) as conn:
+        ensure_app_schema(conn)
+        conn.commit()
+        with dict_cursor(conn) as cur:
+            cur.execute(
+                """
+                SELECT series_code, lang, size
+                FROM series_limitless
+                WHERE size IS NOT NULL AND size > 0
+                ORDER BY series_code, lang
+                """
+            )
+            return list(cur.fetchall())
 
 
 def build_set_html_path(
@@ -191,7 +191,7 @@ def run_batch(
     Iterate through all series and fetch all cards.
 
     Flow:
-    1. Read series list from sqlite
+    1. Read series list from PostgreSQL
     2. For each card:
        - reuse local raw html if exists for the given date
        - otherwise fetch from web and save raw html
@@ -203,7 +203,7 @@ def run_batch(
     extractor = LimitlessExtractor()
     transformer = LimitlessTransformer()
     loader = LimitlessStagingLoader()
-    db_loader = LimitlessLoader(db_path=DB_PATH)
+    db_loader = LimitlessLoader()
 
     service = LimitlessService(
         extractor=extractor,
@@ -213,7 +213,7 @@ def run_batch(
         raw_html_base_dir="Data/raw/limitless/cards_html",
     )
 
-    rows = load_series_records(DB_PATH)
+    rows = load_series_records()
     print(f"[batch] extract_date={extract_date} (staging + raw HTML partition)")
     print(f"[batch] overwrite_card_index={overwrite_card_index}")
 

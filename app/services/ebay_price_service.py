@@ -44,7 +44,7 @@ class EbayPriceService:
             transformer:
                 Transform layer instance.
             loader:
-                SQLite load layer instance.
+                PostgreSQL load layer instance.
             staging_loader:
                 Staging parquet loader.
         """
@@ -128,7 +128,7 @@ class EbayPriceService:
         2. Otherwise fetch raw search JSON and save locally
         3. Transform the selected eBay result into a normalized record
         4. Write staging parquet slices
-        5. Update the SQLite `prices_limitless.ebay_price` value
+        5. Update PostgreSQL price tables
         """
         normalized_extract_date, update_current = resolve_extract_mode(extract_date)
         resolved_marketplace_id = marketplace_id or self.extractor.marketplace_id
@@ -248,7 +248,7 @@ def main() -> None:
     )
     extractor = EbayExtractor(auth=auth, sandbox=sandbox)
     transformer = EbayTransformer()
-    loader = EbayLoader(db_path="ptcg.sqlite")
+    loader = EbayLoader()
     staging_loader = EbayStagingLoader()
 
     service = EbayPriceService(

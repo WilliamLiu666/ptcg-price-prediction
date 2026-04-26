@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
 
@@ -11,10 +10,8 @@ from app.load.hareruya_loader import HareruyaLoader
 from app.transform.hareruya_transformer import HareruyaTransformer
 from app.load.hareruya_staging_loader import HareruyaStagingLoader
 from app.services.hareruya_service import HareruyaService
-from app.utils.sqlite_schema import connect_sqlite
-
-
-DB_PATH = "ptcg.sqlite"
+from app.utils.postgres_db import connect_postgres, dict_cursor
+from app.utils.postgres_schema import ensure_app_schema
 HARERUYA_COLLECTION_BASE_URL = "https://www.hareruya2.com/collections"
 
 
@@ -34,7 +31,7 @@ def resolve_extract_date(cli_value: str | None) -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
-def load_series_records(db_path: str) -> list[sqlite3.Row]:
+def load_series_records() -> list[dict]:
     """
     Load all Hareruya collection records from DB.
 
@@ -43,18 +40,19 @@ def load_series_records(db_path: str) -> list[sqlite3.Row]:
         - series_code
         - collection
     """
-    with closing(connect_sqlite(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            """
-            SELECT series_code, collection
-            FROM series_hareruya
-            WHERE collection IS NOT NULL
-            ORDER BY series_code
-            """
-        ).fetchall()
-
-    return rows
+    with closing(connect_postgres()) as conn:
+        ensure_app_schema(conn)
+        conn.commit()
+        with dict_cursor(conn) as cur:
+            cur.execute(
+                """
+                SELECT series_code, collection
+                FROM series_hareruya
+                WHERE collection IS NOT NULL
+                ORDER BY series_code
+                """
+            )
+            return list(cur.fetchall())
 
 
 def build_collection_url(collection_id: int | str) -> str:
@@ -98,7 +96,7 @@ def run_batch(
     Iterate through all Hareruya collections and fetch all products.
 
     Flow:
-    1. Read collection list from sqlite
+    1. Read collection list from PostgreSQL
     2. For each collection:
        - reuse local raw html/json if exists for the given date
        - otherwise fetch from web and save raw files
@@ -110,7 +108,7 @@ def run_batch(
     extractor = HareruyaExtractor()
     transformer = HareruyaTransformer()
     loader = HareruyaStagingLoader()
-    db_loader = HareruyaLoader(db_path=DB_PATH)
+    db_loader = HareruyaLoader()
 
     service = HareruyaService(
         extractor=extractor,
@@ -120,7 +118,7 @@ def run_batch(
         raw_base_dir="Data/raw/hareruya/collections",
     )
 
-    rows = load_series_records(DB_PATH)
+    rows = load_series_records()
 
     print(f"[batch] extract_date={extract_date} (staging + raw partition)")
     print(f"[batch] overwrite_card_index={overwrite_card_index}")

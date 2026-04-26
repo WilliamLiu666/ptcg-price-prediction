@@ -119,7 +119,7 @@ class LimitlessTransformer:
         Extract rarity from the current print details section.
 
         Example source text:
-            "#63 · Uncommon"
+            "#63 路 Uncommon"
 
         Returns:
             Rarity string such as 'Uncommon', or None if not found.
@@ -130,9 +130,15 @@ class LimitlessTransformer:
         if span is None:
             return None
 
-        text = span.get_text(strip=True)
-        if "·" in text:
-            return text.split("·", 1)[-1].strip()
+        text = " ".join(span.get_text(" ", strip=True).split())
+        text = re.sub(r"^#\S+\s*", "", text)
+
+        if "路" in text:
+            return text.split("路", 1)[-1].strip() or None
+
+        match = re.search(r"([A-Za-z][A-Za-z'/-]*(?: [A-Za-z][A-Za-z'/-]*)*)$", text)
+        if match:
+            return match.group(1).strip()
 
         return None
 
@@ -155,15 +161,15 @@ class LimitlessTransformer:
 
         if usd_tag:
             text = usd_tag.get_text(strip=True)
-            m = re.search(r"\d+\.?\d*", text)
-            if m:
-                usd_price = float(m.group())
+            match = re.search(r"\d+\.?\d*", text)
+            if match:
+                usd_price = float(match.group())
 
         if eur_tag:
             text = eur_tag.get_text(strip=True)
-            m = re.search(r"\d+\.?\d*", text)
-            if m:
-                eur_price = float(m.group())
+            match = re.search(r"\d+\.?\d*", text)
+            if match:
+                eur_price = float(match.group())
 
         return {
             "usd_price": usd_price,
@@ -221,11 +227,7 @@ class LimitlessTransformer:
 
 
 if __name__ == "__main__":
-    from datetime import date
-    from app.data_paths import build_raw_day_dir
     from pathlib import Path
-
-    partition_date = date(2026, 3, 29)
 
     html_path = Path("Data") / "raw" / "limitless" / "cards_html" / "2026" / "03" / "29" / "en_BLK_2.html"
 

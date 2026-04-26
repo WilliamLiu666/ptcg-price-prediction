@@ -3,12 +3,15 @@ from __future__ import annotations
 import argparse
 import os
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 
 from app.extract.hareruya_extractor import HareruyaExtractor
+from app.load.hareruya_loader import HareruyaLoader
 from app.transform.hareruya_transformer import HareruyaTransformer
 from app.load.hareruya_staging_loader import HareruyaStagingLoader
 from app.services.hareruya_service import HareruyaService
+from app.utils.sqlite_schema import connect_sqlite
 
 
 DB_PATH = "ptcg.sqlite"
@@ -40,7 +43,7 @@ def load_series_records(db_path: str) -> list[sqlite3.Row]:
         - series_code
         - collection
     """
-    with sqlite3.connect(db_path) as conn:
+    with closing(connect_sqlite(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -63,16 +66,7 @@ def build_collection_url(collection_id: int | str) -> str:
 
 def main() -> None:
     """
-    Batch job:
-    Iterate through all Hareruya collections and fetch all products.
-
-    Flow:
-    1. Read collection list from sqlite
-    2. For each collection:
-       - reuse local raw html/json if exists for the given date
-       - otherwise fetch from web and save raw files
-       - transform records
-       - write to staging parquet
+    CLI entry point for the Hareruya batch.
     """
     parser = argparse.ArgumentParser(
         description="Hareruya batch: raw HTML/JSON + staging parquet."
@@ -89,23 +83,47 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    extract_date = resolve_extract_date(args.extract_date)
+    run_batch(
+        extract_date=args.extract_date,
+        overwrite_card_index=args.overwrite_card_index,
+    )
+
+
+def run_batch(
+    extract_date: str | None = None,
+    overwrite_card_index: bool = False,
+) -> None:
+    """
+    Batch job:
+    Iterate through all Hareruya collections and fetch all products.
+
+    Flow:
+    1. Read collection list from sqlite
+    2. For each collection:
+       - reuse local raw html/json if exists for the given date
+       - otherwise fetch from web and save raw files
+       - transform records
+       - write to staging parquet
+    """
+    extract_date = resolve_extract_date(extract_date)
 
     extractor = HareruyaExtractor()
     transformer = HareruyaTransformer()
     loader = HareruyaStagingLoader()
+    db_loader = HareruyaLoader(db_path=DB_PATH)
 
     service = HareruyaService(
         extractor=extractor,
         transformer=transformer,
         loader=loader,
+        db_loader=db_loader,
         raw_base_dir="Data/raw/hareruya/collections",
     )
 
     rows = load_series_records(DB_PATH)
 
     print(f"[batch] extract_date={extract_date} (staging + raw partition)")
-    print(f"[batch] overwrite_card_index={args.overwrite_card_index}")
+    print(f"[batch] overwrite_card_index={overwrite_card_index}")
     print(f"[batch] total collections={len(rows)}")
 
     for r in rows:
@@ -127,7 +145,7 @@ def main() -> None:
                 html_filename=f"collection_{collection_id}_page",
                 json_filename=f"collection_{collection_id}_products",
                 extract_date=extract_date,
-                overwrite_card_index=args.overwrite_card_index,
+                overwrite_card_index=overwrite_card_index,
             )
 
             product_count = len(records)
@@ -145,6 +163,8 @@ def main() -> None:
                 f"sample_price_jpy={sample.get('price_jpy')}"
             )
 
+        except FileNotFoundError:
+            raise
         except Exception as e:
             print(
                 f"[SKIP] {series_code} collection={collection_id} failed: {e}"

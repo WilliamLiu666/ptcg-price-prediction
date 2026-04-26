@@ -6,8 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from app.extract.hareruya_extractor import HareruyaExtractor
+from app.load.hareruya_loader import HareruyaLoader
 from app.transform.hareruya_transformer import HareruyaTransformer
 from app.load.hareruya_staging_loader import HareruyaStagingLoader
+from app.utils.extract_policy import resolve_extract_mode
 
 
 class HareruyaService:
@@ -25,11 +27,13 @@ class HareruyaService:
         extractor: HareruyaExtractor,
         transformer: HareruyaTransformer,
         loader: HareruyaStagingLoader,
+        db_loader: HareruyaLoader | None = None,
         raw_base_dir: str | Path = "Data/raw/hareruya/collections",
     ) -> None:
         self.extractor = extractor
         self.transformer = transformer
         self.loader = loader
+        self.db_loader = db_loader
         self.raw_base_dir = Path(raw_base_dir)
 
     @staticmethod
@@ -201,7 +205,7 @@ class HareruyaService:
         Returns:
             List of transformed product records.
         """
-        normalized_extract_date = self._normalize_extract_date(extract_date)
+        normalized_extract_date, update_current = resolve_extract_mode(extract_date)
         collection_id = self._extract_collection_id_from_url(collection_url)
 
         html_path = self._build_html_path(
@@ -230,6 +234,11 @@ class HareruyaService:
         }
 
         if html is None:
+            if not update_current:
+                raise FileNotFoundError(
+                    "historical replay requires cached Hareruya raw HTML: "
+                    f"{html_path}"
+                )
             html, html_context = self.extractor.fetch_html(
                 url=collection_url,
                 filename=html_path.stem,
@@ -242,6 +251,11 @@ class HareruyaService:
             print(f"[extract] reused local html: {html_path}")
 
         if payload is None:
+            if not update_current:
+                raise FileNotFoundError(
+                    "historical replay requires cached Hareruya raw JSON: "
+                    f"{json_path}"
+                )
             payload, json_context = self.extractor.fetch_products_json(
                 collection_url=collection_url,
                 filename=json_path.stem,
@@ -260,6 +274,13 @@ class HareruyaService:
                 record,
                 extract_date=normalized_extract_date,
                 overwrite_card_index=overwrite_card_index,
+            )
+
+        if self.db_loader is not None:
+            self.db_loader.save_product_prices(
+                records,
+                observed_date=normalized_extract_date,
+                update_current=update_current,
             )
 
         return records

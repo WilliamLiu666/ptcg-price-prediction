@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import base64
+import json
 import time
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import requests
 
+from app.data_paths import build_raw_day_dir, build_timestamped_name
 from app.config import get_ebay_credentials, parse_bool_env
 
 
@@ -124,7 +128,14 @@ class EbayExtractor:
     - Database writes
     """
 
-    def __init__(self, auth: EbayAuth, sandbox: bool = False) -> None:
+    def __init__(
+        self,
+        auth: EbayAuth,
+        sandbox: bool = False,
+        json_dir: str | Path | None = None,
+        timeout: int = 30,
+        marketplace_id: str = "EBAY_GB",
+    ) -> None:
         """
         Initialize the extractor.
 
@@ -136,6 +147,22 @@ class EbayExtractor:
         """
         self.auth = auth
         self.sandbox = sandbox
+        self.json_dir = Path(json_dir) if json_dir else build_raw_day_dir("ebay", "search_json")
+        self.json_dir.mkdir(parents=True, exist_ok=True)
+        self.timeout = timeout
+        self.marketplace_id = marketplace_id
+
+        self.session = requests.Session()
+        self.session.headers.update(
+            {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/122.0.0.0 Safari/537.36"
+                ),
+                "Content-Type": "application/json",
+            }
+        )
 
     @property
     def base_url(self) -> str:
@@ -146,39 +173,99 @@ class EbayExtractor:
             return "https://api.sandbox.ebay.com"
         return "https://api.ebay.com"
 
-    def search_items(self, keyword: str, limit: int = 50) -> list[dict[str, Any]]:
+    def build_search_url(self, keyword: str, limit: int = 50) -> str:
+        query = urlencode({"q": keyword, "limit": limit})
+        return f"{self.base_url}/buy/browse/v1/item_summary/search?{query}"
+
+    def fetch_search_payload(
+        self,
+        keyword: str,
+        limit: int = 50,
+        filename: str | None = None,
+        save_to: str | None = None,
+        marketplace_id: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, str | None]]:
         """
-        Search items from eBay by keyword.
+        Fetch raw eBay search response and optionally save it to JSON.
 
         Args:
             keyword:
                 Search keyword.
             limit:
                 Maximum number of items to request.
+            filename:
+                Optional filename without extension when saving to json_dir.
+            save_to:
+                Optional explicit output path.
+            marketplace_id:
+                Marketplace header value. Defaults to the extractor setting.
 
         Returns:
-            Raw eBay item summary list.
+            tuple:
+                - payload: raw JSON response
+                - context: lightweight fetch metadata
         """
         token = self.auth.get_access_token()
-
-        url = f"{self.base_url}/buy/browse/v1/item_summary/search"
+        resolved_marketplace_id = marketplace_id or self.marketplace_id
+        url = self.build_search_url(keyword=keyword, limit=limit)
 
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
-            "X-EBAY-C-MARKETPLACE-ID": "EBAY_GB",
+            "X-EBAY-C-MARKETPLACE-ID": resolved_marketplace_id,
         }
 
-        params = {
-            "q": keyword,
-            "limit": limit,
-        }
-
-        response = requests.get(url, headers=headers, params=params, timeout=30)
+        response = self.session.get(url, headers=headers, timeout=self.timeout)
         response.raise_for_status()
 
-        data = response.json()
-        return data.get("itemSummaries", [])
+        payload = response.json()
+
+        if save_to:
+            self.save_json(payload, save_to)
+        elif filename:
+            path = self.json_dir / f"{filename}.json"
+            self.save_json(payload, str(path))
+        else:
+            path = self.json_dir / build_timestamped_name(prefix="search", ext="json")
+            self.save_json(payload, str(path))
+
+        context = {
+            "search_keyword": keyword,
+            "marketplace_id": resolved_marketplace_id,
+            "search_limit": str(limit),
+            "source_url": url,
+            "final_url": response.url,
+        }
+
+        return payload, context
+
+    def search_items(
+        self,
+        keyword: str,
+        limit: int = 50,
+        marketplace_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Search items from eBay by keyword.
+        """
+        payload, _ = self.fetch_search_payload(
+            keyword=keyword,
+            limit=limit,
+            marketplace_id=marketplace_id,
+        )
+
+        raw_items = payload.get("itemSummaries")
+        if not isinstance(raw_items, list):
+            return []
+        return [item for item in raw_items if isinstance(item, dict)]
+
+    def save_json(self, payload: dict[str, Any], path: str) -> None:
+        """
+        Save raw JSON to a local file.
+        """
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
 def main() -> None:
@@ -197,8 +284,14 @@ def main() -> None:
     )
     extractor = EbayExtractor(auth=auth, sandbox=sandbox)
 
-    items = extractor.search_items(keyword="pokemon pikachu", limit=5)
+    payload, context = extractor.fetch_search_payload(
+        keyword="pokemon pikachu",
+        limit=5,
+        filename="pokemon_pikachu",
+    )
+    items = payload.get("itemSummaries", [])
     print(f"Fetched {len(items)} items.")
+    print(context)
 
 
 if __name__ == "__main__":

@@ -4,8 +4,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.extract.limitless_extractor import LimitlessExtractor
+from app.load.limitless_loader import LimitlessLoader
 from app.transform.limitless_transformer import LimitlessTransformer
 from app.load.limitless_staging_loader import LimitlessStagingLoader
+from app.utils.extract_policy import resolve_extract_mode
 
 
 class LimitlessService:
@@ -23,11 +25,13 @@ class LimitlessService:
         extractor: LimitlessExtractor,
         transformer: LimitlessTransformer,
         loader: LimitlessStagingLoader,
+        db_loader: LimitlessLoader | None = None,
         raw_html_base_dir: str | Path = "Data/raw/limitless/cards_html",
     ) -> None:
         self.extractor = extractor
         self.transformer = transformer
         self.loader = loader
+        self.db_loader = db_loader
         self.raw_html_base_dir = Path(raw_html_base_dir)
 
     @staticmethod
@@ -136,7 +140,7 @@ class LimitlessService:
         Returns:
             The transformed record.
         """
-        normalized_extract_date = self._normalize_extract_date(extract_date)
+        normalized_extract_date, update_current = resolve_extract_mode(extract_date)
 
         html_path = self._build_html_path(
             lang=lang,
@@ -158,6 +162,11 @@ class LimitlessService:
         }
 
         if html is None:
+            if not update_current:
+                raise FileNotFoundError(
+                    "historical replay requires cached Limitless raw HTML: "
+                    f"{html_path}"
+                )
             html, fetch_context = self.extractor.fetch_html(
                 lang=lang,
                 set_code=set_code,
@@ -178,6 +187,14 @@ class LimitlessService:
             extract_date=normalized_extract_date,
             overwrite_card_index=overwrite_card_index,
         )
+
+        if self.db_loader is not None:
+            self.db_loader.save_card_index(record)
+            self.db_loader.save_card_price(
+                record,
+                observed_date=normalized_extract_date,
+                update_current=update_current,
+            )
 
         return record
 

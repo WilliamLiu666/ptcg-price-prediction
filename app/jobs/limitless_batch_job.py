@@ -3,13 +3,17 @@ from __future__ import annotations
 import argparse
 import os
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
 from app.extract.limitless_extractor import LimitlessExtractor
+from app.load.limitless_loader import LimitlessLoader
 from app.transform.limitless_transformer import LimitlessTransformer
 from app.load.limitless_staging_loader import LimitlessStagingLoader
 from app.services.limitless_service import LimitlessService
+from app.utils.extract_policy import resolve_extract_mode
+from app.utils.sqlite_schema import connect_sqlite
 
 
 DB_PATH = "ptcg.sqlite"
@@ -42,7 +46,7 @@ def load_series_records(db_path: str):
         - lang
         - size
     """
-    with sqlite3.connect(db_path) as conn:
+    with closing(connect_sqlite(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -81,6 +85,7 @@ def discover_card_codes(
     size: int,
     extract_date: str,
     raw_set_html_base_dir: str | Path = RAW_SET_HTML_BASE_DIR,
+    allow_network: bool = True,
 ) -> list[str]:
     """
     Discover card codes from the Limitless set listing page.
@@ -100,6 +105,10 @@ def discover_card_codes(
             set_html = set_html_path.read_text(encoding="utf-8")
             print(f"[discover] reused local set html: {set_html_path}")
         else:
+            if not allow_network:
+                raise FileNotFoundError(
+                    f"historical replay requires cached Limitless set html: {set_html_path}"
+                )
             set_html, _ = extractor.fetch_set_html(
                 lang=lang,
                 set_code=set_code,
@@ -150,16 +159,7 @@ def discover_card_codes(
 
 def main() -> None:
     """
-    Batch job:
-    Iterate through all series and fetch all cards.
-
-    Flow:
-    1. Read series list from sqlite
-    2. For each card:
-       - reuse local raw html if exists for the given date
-       - otherwise fetch from web and save raw html
-       - transform record
-       - write to staging parquet
+    CLI entry point for the Limitless batch.
     """
     parser = argparse.ArgumentParser(
         description="Limitless batch: raw HTML + staging parquet."
@@ -176,22 +176,46 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    extract_date = resolve_extract_date(args.extract_date)
+    run_batch(
+        extract_date=args.extract_date,
+        overwrite_card_index=args.overwrite_card_index,
+    )
+
+
+def run_batch(
+    extract_date: str | None = None,
+    overwrite_card_index: bool = False,
+) -> None:
+    """
+    Batch job:
+    Iterate through all series and fetch all cards.
+
+    Flow:
+    1. Read series list from sqlite
+    2. For each card:
+       - reuse local raw html if exists for the given date
+       - otherwise fetch from web and save raw html
+       - transform record
+       - write to staging parquet
+    """
+    extract_date, allow_network = resolve_extract_mode(extract_date)
 
     extractor = LimitlessExtractor()
     transformer = LimitlessTransformer()
     loader = LimitlessStagingLoader()
+    db_loader = LimitlessLoader(db_path=DB_PATH)
 
     service = LimitlessService(
         extractor=extractor,
         transformer=transformer,
         loader=loader,
+        db_loader=db_loader,
         raw_html_base_dir="Data/raw/limitless/cards_html",
     )
 
     rows = load_series_records(DB_PATH)
     print(f"[batch] extract_date={extract_date} (staging + raw HTML partition)")
-    print(f"[batch] overwrite_card_index={args.overwrite_card_index}")
+    print(f"[batch] overwrite_card_index={overwrite_card_index}")
 
     for r in rows:
         series_code = r["series_code"]
@@ -204,6 +228,7 @@ def main() -> None:
             set_code=series_code,
             size=size,
             extract_date=extract_date,
+            allow_network=allow_network,
         )
 
         print(
@@ -220,7 +245,7 @@ def main() -> None:
                     card_code=card_code_str,
                     filename=f"{lang}_{series_code}_{card_code_str}",
                     extract_date=extract_date,
-                    overwrite_card_index=args.overwrite_card_index,
+                    overwrite_card_index=overwrite_card_index,
                 )
 
                 if lang == "en":
@@ -238,6 +263,8 @@ def main() -> None:
                         f"rarity={record.get('rarity')!r}"
                     )
 
+            except FileNotFoundError:
+                raise
             except Exception as e:
                 print(f"[SKIP] {series_code}/{card_code_str} failed: {e}")
                 continue

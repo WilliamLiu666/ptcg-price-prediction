@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
@@ -10,6 +9,7 @@ from app.jobs.limitless_batch_job import build_set_html_path, discover_card_code
 from app.load.limitless_loader import LimitlessLoader
 from app.services.limitless_service import LimitlessService
 from app.transform.limitless_transformer import LimitlessTransformer
+from tests.postgres_test_utils import connect_schema, temporary_schema
 
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "limitless"
@@ -97,65 +97,69 @@ class LimitlessPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             raw_base_dir = root / "raw"
-            db_path = root / "ptcg.sqlite"
 
             html_path = raw_base_dir / "2000" / "01" / "01" / "en_BLK_2.html"
             html_path.parent.mkdir(parents=True, exist_ok=True)
             html_path.write_text(html, encoding="utf-8")
 
-            db_loader = LimitlessLoader(db_path=db_path)
-            db_loader.ensure_cards_index_table()
-            db_loader.ensure_prices_limitless_schema()
+            with temporary_schema() as schema_name:
+                db_loader = LimitlessLoader(schema_name=schema_name)
+                db_loader.ensure_cards_index_table()
+                db_loader.ensure_prices_limitless_schema()
 
-            with closing(sqlite3.connect(db_path)) as conn:
-                conn.execute(
-                    """
-                    INSERT INTO prices_limitless (
-                      card_id, data_id, lang, set_code, card_code, card_name, rarity,
-                      usd_price, eur_price, observed_at, observed_date, created_at, updated_at
-                    )
-                    VALUES (
-                      124, 456, 'en', 'BLK', '2', 'Sample Card', 'Uncommon',
-                      9.99, 8.88, '2026-04-26T00:00:00+00:00', '2026-04-26',
-                      '2026-04-26T00:00:00+00:00', '2026-04-26T00:00:00+00:00'
-                    )
-                    """
+                with closing(connect_schema(schema_name)) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO prices_limitless (
+                              card_id, data_id, lang, set_code, card_code, card_name, rarity,
+                              usd_price, eur_price, observed_at, observed_date, created_at, updated_at
+                            )
+                            VALUES (
+                              124, 456, 'en', 'BLK', '2', 'Sample Card', 'Uncommon',
+                              9.99, 8.88, '2026-04-26T00:00:00+00:00', '2026-04-26',
+                              '2026-04-26T00:00:00+00:00', '2026-04-26T00:00:00+00:00'
+                            )
+                            """
+                        )
+                    conn.commit()
+
+                service = LimitlessService(
+                    extractor=_UnexpectedFetchExtractor(),
+                    transformer=LimitlessTransformer(),
+                    loader=_NoopLimitlessStagingLoader(),
+                    db_loader=db_loader,
+                    raw_html_base_dir=raw_base_dir,
                 )
-                conn.commit()
 
-            service = LimitlessService(
-                extractor=_UnexpectedFetchExtractor(),
-                transformer=LimitlessTransformer(),
-                loader=_NoopLimitlessStagingLoader(),
-                db_loader=db_loader,
-                raw_html_base_dir=raw_base_dir,
-            )
+                service.run_one(
+                    lang="en",
+                    set_code="BLK",
+                    card_code="2",
+                    extract_date="2000-01-01",
+                )
 
-            service.run_one(
-                lang="en",
-                set_code="BLK",
-                card_code="2",
-                extract_date="2000-01-01",
-            )
+                with closing(connect_schema(schema_name)) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            SELECT usd_price, eur_price, observed_date
+                            FROM prices_limitless
+                            WHERE lang = 'en' AND set_code = 'BLK' AND card_code = '2'
+                            """
+                        )
+                        current_row = cur.fetchone()
+                        cur.execute(
+                            """
+                            SELECT usd_price, eur_price, observed_date
+                            FROM prices_limitless_history
+                            WHERE lang = 'en' AND set_code = 'BLK' AND card_code = '2'
+                            """
+                        )
+                        history_row = cur.fetchone()
 
-            with closing(sqlite3.connect(db_path)) as conn:
-                current_row = conn.execute(
-                    """
-                    SELECT usd_price, eur_price, observed_date
-                    FROM prices_limitless
-                    WHERE lang = 'en' AND set_code = 'BLK' AND card_code = '2'
-                    """
-                ).fetchone()
-                history_row = conn.execute(
-                    """
-                    SELECT usd_price, eur_price, observed_date
-                    FROM prices_limitless_history
-                    WHERE lang = 'en' AND set_code = 'BLK' AND card_code = '2'
-                    """
-                ).fetchone()
-
-            self.assertEqual(current_row, (9.99, 8.88, "2026-04-26"))
-            self.assertEqual(history_row, (1.25, 1.1, "2000-01-01"))
+                self.assertEqual(current_row, (9.99, 8.88, "2026-04-26"))
+                self.assertEqual(history_row, (1.25, 1.1, "2000-01-01"))
 
 
 if __name__ == "__main__":

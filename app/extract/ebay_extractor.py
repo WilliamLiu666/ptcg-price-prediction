@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
+from requests import RequestException
 
 import requests
 
@@ -60,6 +61,16 @@ class EbayAuth:
             return "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
         return "https://api.ebay.com/identity/v1/oauth2/token"
 
+    @staticmethod
+    def _raise_network_error(url: str, exc: Exception) -> None:
+        raise RuntimeError(
+            "Network error while contacting the eBay OAuth endpoint "
+            f"{url}. This usually means DNS or internet access is unavailable "
+            "on this machine, not that your eBay credentials are wrong. "
+            "Live runs for today's extract_date require network access; "
+            "historical replays only work from cached raw files."
+        ) from exc
+
     def get_access_token(
         self,
         scope: str = "https://api.ebay.com/oauth/api_scope",
@@ -94,12 +105,15 @@ class EbayAuth:
             "scope": scope,
         }
 
-        response = requests.post(
-            self.token_url,
-            headers=headers,
-            data=data,
-            timeout=30,
-        )
+        try:
+            response = requests.post(
+                self.token_url,
+                headers=headers,
+                data=data,
+                timeout=30,
+            )
+        except RequestException as exc:
+            self._raise_network_error(self.token_url, exc)
         response.raise_for_status()
 
         token_data = response.json()
@@ -177,6 +191,15 @@ class EbayExtractor:
         query = urlencode({"q": keyword, "limit": limit})
         return f"{self.base_url}/buy/browse/v1/item_summary/search?{query}"
 
+    @staticmethod
+    def _raise_network_error(url: str, exc: Exception) -> None:
+        raise RuntimeError(
+            "Network error while contacting the eBay Browse API "
+            f"{url}. This usually means DNS or internet access is unavailable "
+            "on this machine. If you are replaying a past extract_date, make "
+            "sure the raw JSON for that day already exists locally."
+        ) from exc
+
     def fetch_search_payload(
         self,
         keyword: str,
@@ -215,7 +238,10 @@ class EbayExtractor:
             "X-EBAY-C-MARKETPLACE-ID": resolved_marketplace_id,
         }
 
-        response = self.session.get(url, headers=headers, timeout=self.timeout)
+        try:
+            response = self.session.get(url, headers=headers, timeout=self.timeout)
+        except RequestException as exc:
+            self._raise_network_error(url, exc)
         response.raise_for_status()
 
         payload = response.json()

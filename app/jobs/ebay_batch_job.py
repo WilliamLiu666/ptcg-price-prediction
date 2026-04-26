@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import argparse
 import os
-import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
-from pathlib import Path
 
 from app.config import get_ebay_credentials, parse_bool_env
 from app.extract.ebay_extractor import EbayAuth, EbayExtractor
@@ -13,7 +11,8 @@ from app.load.ebay_loader import EbayLoader
 from app.load.ebay_staging_loader import EbayStagingLoader
 from app.services.ebay_price_service import EbayPriceService
 from app.transform.ebay_transformer import EbayTransformer
-from app.utils.sqlite_schema import connect_sqlite
+from app.utils.postgres_db import connect_postgres, dict_cursor
+from app.utils.postgres_schema import ensure_app_schema
 
 
 TARGET_LANG = "en"
@@ -53,30 +52,30 @@ class EbayBatchJob:
 
     def __init__(
         self,
-        db_path: str | Path,
         client_id: str,
         client_secret: str,
         sandbox: bool = False,
+        schema_name: str | None = None,
     ) -> None:
         """
         Initialize the batch job.
 
         Args:
-            db_path:
-                SQLite database path.
             client_id:
                 eBay application client ID.
             client_secret:
                 eBay application client secret.
             sandbox:
                 Whether to use sandbox environment.
+            schema_name:
+                Optional PostgreSQL schema/search_path override.
         """
-        self.db_path = Path(db_path)
         self.client_id = client_id
         self.client_secret = client_secret
         self.sandbox = sandbox
+        self.schema_name = schema_name
 
-    def load_pending_cards(self, extract_date: str | None = None) -> list[sqlite3.Row]:
+    def load_pending_cards(self, extract_date: str | None = None) -> list[dict]:
         """
         Load all eligible English cards for the eBay batch.
 
@@ -84,40 +83,39 @@ class EbayBatchJob:
             List of card rows from cards_index when available, otherwise
             from prices_limitless.
         """
-        with closing(connect_sqlite(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            tables = {
-                str(row[0])
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
-                ).fetchall()
-            }
+        with closing(connect_postgres(schema_name=self.schema_name)) as conn:
+            ensure_app_schema(conn)
+            conn.commit()
 
-            if "cards_index" in tables:
-                cursor = conn.execute(
+            with dict_cursor(conn) as cur:
+                cur.execute(
                     """
                     SELECT card_id, lang, set_code, card_code, card_name
                     FROM cards_index
-                    WHERE lang = ?
+                    WHERE lang = %s
                       AND card_name IS NOT NULL
-                      AND TRIM(card_name) <> ''
+                      AND BTRIM(card_name) <> ''
                     ORDER BY set_code, card_code
                     """,
                     (TARGET_LANG,),
                 )
-            else:
-                cursor = conn.execute(
+                rows = cur.fetchall()
+
+                if rows:
+                    return list(rows)
+
+                cur.execute(
                     """
                     SELECT card_id, lang, set_code, card_code, card_name
                     FROM prices_limitless
-                    WHERE lang = ?
+                    WHERE lang = %s
                       AND card_name IS NOT NULL
-                      AND TRIM(card_name) <> ''
+                      AND BTRIM(card_name) <> ''
                     ORDER BY set_code, card_code
                     """,
                     (TARGET_LANG,),
                 )
-            return cursor.fetchall()
+                return list(cur.fetchall())
 
     def run(
         self,
@@ -140,7 +138,7 @@ class EbayBatchJob:
             marketplace_id=TARGET_MARKETPLACE_ID,
         )
         transformer = EbayTransformer()
-        loader = EbayLoader(db_path=self.db_path)
+        loader = EbayLoader(schema_name=self.schema_name)
         staging_loader = EbayStagingLoader()
         service = EbayPriceService(
             extractor=extractor,
@@ -202,7 +200,7 @@ def main() -> None:
     CLI entry point for the eBay batch.
     """
     parser = argparse.ArgumentParser(
-        description="eBay batch: raw JSON + staging parquet + SQLite price update."
+        description="eBay batch: raw JSON + staging parquet + PostgreSQL price update."
     )
     parser.add_argument(
         "--extract-date",
@@ -233,7 +231,6 @@ def run_batch(
     sandbox = parse_bool_env("EBAY_SANDBOX", default=False)
 
     job = EbayBatchJob(
-        db_path="ptcg.sqlite",
         client_id=client_id,
         client_secret=client_secret,
         sandbox=sandbox,

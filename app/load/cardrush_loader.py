@@ -1,17 +1,17 @@
-import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
-from pathlib import Path
 
-from app.utils.sqlite_schema import connect_sqlite, ensure_cardrush_schema
+from app.utils.postgres_db import connect_postgres
+from app.utils.postgres_schema import ensure_cardrush_schema
+from psycopg2.extensions import connection as PgConnection
 
 
 class CardrushLoader:
-    def __init__(self, db_path: str | Path = "ptcg.sqlite"):
-        self.db_path = Path(db_path)
+    def __init__(self, schema_name: str | None = None):
+        self.schema_name = schema_name
 
-    def _connect(self) -> sqlite3.Connection:
-        return connect_sqlite(self.db_path)
+    def _connect(self) -> PgConnection:
+        return connect_postgres(schema_name=self.schema_name)
 
     def save_products(self, product_group: str, items: list[dict], parse_price_func) -> int:
         if not product_group:
@@ -54,7 +54,7 @@ class CardrushLoader:
                     price_yen, url,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(product_id) DO UPDATE SET
                     product_group  = excluded.product_group,
                     model_number = excluded.model_number,
@@ -77,7 +77,7 @@ class CardrushLoader:
                 INSERT INTO prices_cardrush (
                     product_id, observed_at, observed_date, price_yen, price_text, source
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 """, (
                     product_id,
                     observed_at,
@@ -91,7 +91,7 @@ class CardrushLoader:
                 INSERT INTO prices_cardrush_current (
                     product_id, price_yen, price_text, observed_at, observed_date, source, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(product_id) DO UPDATE SET
                     price_yen = excluded.price_yen,
                     price_text = excluded.price_text,
@@ -116,5 +116,5 @@ class CardrushLoader:
         return written
 
     @staticmethod
-    def _ensure_schema(conn: sqlite3.Connection) -> None:
+    def _ensure_schema(conn: PgConnection) -> None:
         ensure_cardrush_schema(conn)

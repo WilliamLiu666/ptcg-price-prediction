@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import sqlite3
 from contextlib import closing
-from pathlib import Path
 
 from app.utils.extract_policy import resolve_observed_timestamps
-from app.utils.sqlite_schema import (
-    connect_sqlite,
+from app.utils.postgres_db import connect_postgres
+from app.utils.postgres_schema import (
     ensure_ebay_schema,
     ensure_prices_limitless_schema,
 )
+from psycopg2.extensions import connection as PgConnection
 
 
 class EbayLoader:
@@ -17,7 +16,7 @@ class EbayLoader:
     Load layer for eBay prices.
 
     Responsibilities:
-    - Update eBay price in SQLite
+    - Update eBay price in PostgreSQL
     - Manage database connection settings
 
     This class does NOT handle:
@@ -26,21 +25,21 @@ class EbayLoader:
     - Price selection logic
     """
 
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(self, schema_name: str | None = None) -> None:
         """
         Initialize the loader.
 
         Args:
-            db_path:
-                SQLite database path.
+            schema_name:
+                Optional PostgreSQL schema/search_path override.
         """
-        self.db_path = Path(db_path)
+        self.schema_name = schema_name
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(self) -> PgConnection:
         """
-        Open a SQLite connection with useful pragmas.
+        Open a PostgreSQL connection.
         """
-        return connect_sqlite(self.db_path)
+        return connect_postgres(schema_name=self.schema_name)
 
     def ensure_ebay_columns(self) -> None:
         """
@@ -118,42 +117,91 @@ class EbayLoader:
         with closing(self._connect()) as conn:
             updated_rows = 0
 
-            if update_current:
-                cursor = conn.execute(
-                    """
-                    UPDATE prices_limitless
-                    SET ebay_price = ?,
-                        ebay_observed_at = ?,
-                        ebay_observed_date = ?,
-                        updated_at = ?
-                    WHERE lang = ? AND set_code = ? AND card_code = ?
-                    """,
-                    (ebay_price, observed_at, observed_date, observed_at, lang, set_code, card_code),
-                )
-                updated_rows = cursor.rowcount
+            with conn.cursor() as cur:
+                if update_current:
+                    cur.execute(
+                        """
+                        UPDATE prices_limitless
+                        SET ebay_price = %s,
+                            ebay_observed_at = %s,
+                            ebay_observed_date = %s,
+                            updated_at = %s
+                        WHERE lang = %s AND set_code = %s AND card_code = %s
+                        """,
+                        (ebay_price, observed_at, observed_date, observed_at, lang, set_code, card_code),
+                    )
+                    updated_rows = cur.rowcount
 
-                conn.execute(
+                    cur.execute(
+                        """
+                        INSERT INTO prices_ebay_current
+                        (
+                          card_id, lang, set_code, card_code, card_name,
+                          marketplace_id, currency, condition,
+                          selected_item_id, selected_title, selected_item_web_url,
+                          ebay_price, observed_at, observed_date, created_at, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT(lang, set_code, card_code, marketplace_id, currency)
+                        DO UPDATE SET
+                          card_id = COALESCE(excluded.card_id, prices_ebay_current.card_id),
+                          card_name = COALESCE(excluded.card_name, prices_ebay_current.card_name),
+                          condition = COALESCE(excluded.condition, prices_ebay_current.condition),
+                          selected_item_id = COALESCE(excluded.selected_item_id, prices_ebay_current.selected_item_id),
+                          selected_title = COALESCE(excluded.selected_title, prices_ebay_current.selected_title),
+                          selected_item_web_url = COALESCE(excluded.selected_item_web_url, prices_ebay_current.selected_item_web_url),
+                          ebay_price = excluded.ebay_price,
+                          observed_at = excluded.observed_at,
+                          observed_date = excluded.observed_date,
+                          updated_at = excluded.updated_at
+                        """,
+                        (
+                            card_id,
+                            lang,
+                            set_code,
+                            card_code,
+                            card_name,
+                            marketplace_id,
+                            resolved_currency,
+                            condition,
+                            selected_item_id,
+                            selected_title,
+                            selected_item_web_url,
+                            ebay_price,
+                            observed_at,
+                            observed_date,
+                            observed_at,
+                            observed_at,
+                        ),
+                    )
+
+                cur.execute(
                     """
-                    INSERT INTO prices_ebay_current
+                    INSERT INTO prices_ebay_history
                     (
                       card_id, lang, set_code, card_code, card_name,
                       marketplace_id, currency, condition,
                       selected_item_id, selected_title, selected_item_web_url,
-                      ebay_price, observed_at, observed_date, created_at, updated_at
+                      ebay_price, ebay_observed_at, ebay_observed_date
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(lang, set_code, card_code, marketplace_id, currency)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(
+                      lang,
+                      set_code,
+                      card_code,
+                      marketplace_id,
+                      currency,
+                      ebay_observed_date
+                    )
                     DO UPDATE SET
-                      card_id = COALESCE(excluded.card_id, prices_ebay_current.card_id),
-                      card_name = COALESCE(excluded.card_name, prices_ebay_current.card_name),
-                      condition = COALESCE(excluded.condition, prices_ebay_current.condition),
-                      selected_item_id = COALESCE(excluded.selected_item_id, prices_ebay_current.selected_item_id),
-                      selected_title = COALESCE(excluded.selected_title, prices_ebay_current.selected_title),
-                      selected_item_web_url = COALESCE(excluded.selected_item_web_url, prices_ebay_current.selected_item_web_url),
+                      card_id = COALESCE(excluded.card_id, prices_ebay_history.card_id),
+                      card_name = COALESCE(excluded.card_name, prices_ebay_history.card_name),
+                      condition = COALESCE(excluded.condition, prices_ebay_history.condition),
+                      selected_item_id = COALESCE(excluded.selected_item_id, prices_ebay_history.selected_item_id),
+                      selected_title = COALESCE(excluded.selected_title, prices_ebay_history.selected_title),
+                      selected_item_web_url = COALESCE(excluded.selected_item_web_url, prices_ebay_history.selected_item_web_url),
                       ebay_price = excluded.ebay_price,
-                      observed_at = excluded.observed_at,
-                      observed_date = excluded.observed_date,
-                      updated_at = excluded.updated_at
+                      ebay_observed_at = excluded.ebay_observed_at
                     """,
                     (
                         card_id,
@@ -170,56 +218,8 @@ class EbayLoader:
                         ebay_price,
                         observed_at,
                         observed_date,
-                        observed_at,
-                        observed_at,
                     ),
                 )
-
-            conn.execute(
-                """
-                INSERT INTO prices_ebay_history
-                (
-                  card_id, lang, set_code, card_code, card_name,
-                  marketplace_id, currency, condition,
-                  selected_item_id, selected_title, selected_item_web_url,
-                  ebay_price, ebay_observed_at, ebay_observed_date
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(
-                  lang,
-                  set_code,
-                  card_code,
-                  marketplace_id,
-                  currency,
-                  ebay_observed_date
-                )
-                DO UPDATE SET
-                  card_id = COALESCE(excluded.card_id, prices_ebay_history.card_id),
-                  card_name = COALESCE(excluded.card_name, prices_ebay_history.card_name),
-                  condition = COALESCE(excluded.condition, prices_ebay_history.condition),
-                  selected_item_id = COALESCE(excluded.selected_item_id, prices_ebay_history.selected_item_id),
-                  selected_title = COALESCE(excluded.selected_title, prices_ebay_history.selected_title),
-                  selected_item_web_url = COALESCE(excluded.selected_item_web_url, prices_ebay_history.selected_item_web_url),
-                  ebay_price = excluded.ebay_price,
-                  ebay_observed_at = excluded.ebay_observed_at
-                """,
-                (
-                    card_id,
-                    lang,
-                    set_code,
-                    card_code,
-                    card_name,
-                    marketplace_id,
-                    resolved_currency,
-                    condition,
-                    selected_item_id,
-                    selected_title,
-                    selected_item_web_url,
-                    ebay_price,
-                    observed_at,
-                    observed_date,
-                ),
-            )
             conn.commit()
             return updated_rows
 
@@ -228,7 +228,7 @@ def main() -> None:
     """
     Simple standalone test for this module.
     """
-    loader = EbayLoader(db_path="ptcg.sqlite")
+    loader = EbayLoader()
 
     updated_rows = loader.update_ebay_price(
         lang="en",

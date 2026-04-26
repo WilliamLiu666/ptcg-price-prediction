@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 _ENV_LOADED = False
@@ -32,21 +33,35 @@ def load_local_env() -> None:
         return
 
     repo_root = Path(__file__).resolve().parent.parent
-    env_path = repo_root / ".env"
-    if not env_path.exists():
-        _ENV_LOADED = True
-        return
+    env_paths = (
+        repo_root / ".env",
+        repo_root / "docker" / ".env",
+    )
 
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        parsed = _parse_env_line(line)
-        if parsed is None:
+    for env_path in env_paths:
+        if not env_path.exists():
             continue
 
-        key, value = parsed
-        if key and key not in os.environ:
-            os.environ[key] = value
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            parsed = _parse_env_line(line)
+            if parsed is None:
+                continue
+
+            key, value = parsed
+            if key and key not in os.environ:
+                os.environ[key] = value
 
     _ENV_LOADED = True
+
+
+@dataclass(frozen=True)
+class PostgresSettings:
+    host: str
+    port: int
+    dbname: str
+    user: str
+    password: str
+    schema: str = "public"
 
 
 def parse_bool_env(name: str, default: bool = False) -> bool:
@@ -77,3 +92,32 @@ def get_ebay_credentials() -> tuple[str, str]:
         )
 
     return client_id, client_secret
+
+
+def get_postgres_settings() -> PostgresSettings:
+    """
+    Read PostgreSQL connection settings from environment variables.
+    """
+    load_local_env()
+
+    host = os.getenv("DB_HOST", "").strip()
+    port = os.getenv("DB_PORT", "").strip()
+    dbname = os.getenv("DB_NAME", "").strip()
+    user = os.getenv("DB_USER", "").strip()
+    password = os.getenv("DB_PASSWORD", "").strip()
+    schema = os.getenv("DB_SCHEMA", "public").strip() or "public"
+
+    if not all((host, port, dbname, user, password)):
+        raise ValueError(
+            "Missing PostgreSQL settings. Set DB_HOST, DB_PORT, DB_NAME, "
+            "DB_USER, and DB_PASSWORD before running the app."
+        )
+
+    return PostgresSettings(
+        host=host,
+        port=int(port),
+        dbname=dbname,
+        user=user,
+        password=password,
+        schema=schema,
+    )
